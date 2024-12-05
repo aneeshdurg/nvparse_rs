@@ -1,4 +1,4 @@
-/target
+target/
 *.svg
 perf.data*
 *.tbl

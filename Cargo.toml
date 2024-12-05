@@ -5,9 +5,14 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.5.22", features = ["derive"] }
-gpgpu = "0.2.0"
+gpgpu = { git = "https://github.com/UpsettingBoy/gpgpu-rs/" }
 memmap = "0.7.0"
 tqdm = "0.7.0"
+futures = "0.3.31"
+wgpu = { version = "23.0.1", features = ["spirv"] }
+
+[build-dependencies]
+spirv-builder = { git = "https://github.com/rust-gpu/rust-gpu" }
 
 
 [profile.release]

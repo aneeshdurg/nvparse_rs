@@ -3,6 +3,8 @@ use gpgpu::*;
 use memmap::MmapOptions;
 use std::fs::File;
 
+pub mod example;
+
 // fn get_size() -> Result<u32, Box<dyn std::error::Error>> {
 //     if let Ok(size_var) = std::env::var("COMPUTESIZE") {
 //         return Ok(size_var.parse()?);
@@ -138,6 +140,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     }
     // }
     // println!("{}", reduce(cpu_data)?);
+    example::main();
 
     let args = Args::parse();
 
