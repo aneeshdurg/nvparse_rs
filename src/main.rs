@@ -1,9 +1,8 @@
 use clap::Parser;
-use gpgpu::*;
 use memmap::MmapOptions;
 use std::fs::File;
 
-pub mod example;
+pub mod driver;
 
 // fn get_size() -> Result<u32, Box<dyn std::error::Error>> {
 //     if let Ok(size_var) = std::env::var("COMPUTESIZE") {
@@ -63,63 +62,18 @@ fn cpu_count_char(data: &[u8], char: u8) -> u32 {
     acc
 }
 
+fn run_count_char(data: &[u8], char: u8, nthreads: usize) -> u32 {
+    let res =
+        futures::executor::block_on(driver::run_charcount_shader(data, char, nthreads)).unwrap();
+    cpu_reduce(res)
+}
+
 fn count_char(nthreads: usize, data: &[u8], char: u8) -> Result<u32, Box<dyn std::error::Error>> {
     if data.len() < (2 * nthreads) {
         // Insufficient parallelism, reduce on CPU
         Ok(cpu_count_char(data, char))
     } else {
-        // Framework initialization
-        let fw = Framework::default();
-
-        // TODO get this dynamically from wgpu::Device::Limits
-        const MAX_CAPACITY: u64 = 1073741824;
-
-        // GPU buffer creation
-        let buf_input = GpuBuffer::<u8>::with_capacity(&fw, MAX_CAPACITY);
-        let buf_chunk_size = GpuBuffer::<u32>::with_capacity(&fw, 1);
-        let buf_data_len = GpuBuffer::<u32>::with_capacity(&fw, 1);
-        let buf_char = GpuBuffer::<u32>::from_slice(&fw, &[char as u32]);
-        let buf_c = GpuBuffer::<u32>::with_capacity(&fw, nthreads as u64);
-
-        let shader = Shader::from_wgsl_file(&fw, "./countchar.wgsl")?;
-
-        // Descriptor set and program creation
-        let desc = DescriptorSet::default()
-            .bind_buffer(&buf_input, GpuBufferUsage::ReadOnly)
-            .bind_buffer(&buf_chunk_size, GpuBufferUsage::ReadOnly)
-            .bind_buffer(&buf_data_len, GpuBufferUsage::ReadOnly)
-            .bind_buffer(&buf_char, GpuBufferUsage::ReadOnly)
-            .bind_buffer(&buf_c, GpuBufferUsage::ReadWrite);
-        let program = Program::new(&shader, "main").add_descriptor_set(desc); // Entry point
-        let kern = Kernel::new(&fw, program);
-
-        let mut acc = 0;
-        let mut offset = 0;
-        while offset < data.len() {
-            let end = std::cmp::min(offset + (MAX_CAPACITY as usize), data.len());
-            let data_len = end - offset;
-
-            if data_len < (2 * nthreads) {
-                acc += cpu_count_char(&data[offset..end], char);
-                offset = end;
-                continue;
-            }
-
-            buf_input.write(&data[offset..end])?;
-
-            let chunk_size = (data_len / nthreads) as u32 + 1;
-            buf_chunk_size.write(&[chunk_size])?;
-            buf_data_len.write(&[data_len as u32])?;
-
-            let mut buf_c_cpu = vec![0u32; nthreads];
-            kern.enqueue(nthreads as u32, 1, 1);
-            buf_c.read_blocking(&mut buf_c_cpu)?;
-            // eprintln!("{:?}", buf_c_cpu);
-            acc += cpu_reduce(buf_c_cpu);
-
-            offset = end;
-        }
-        Ok(acc)
+        Ok(run_count_char(data, char, nthreads))
     }
 }
 
@@ -140,8 +94,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     }
     // }
     // println!("{}", reduce(cpu_data)?);
-    example::main();
-
     let args = Args::parse();
 
     let file = File::open(&args.filename)?;
