@@ -94,7 +94,7 @@ pub async fn run_charcount_shader(
                 ty: wgpu::BindingType::Buffer {
                     has_dynamic_offset: false,
                     min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    ty: wgpu::BufferBindingType::Uniform,
                 },
             },
             wgpu::BindGroupLayoutEntry {
@@ -149,8 +149,8 @@ pub async fn run_charcount_shader(
 
     let char_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Character to match"),
-        contents: &(char as u32).to_ne_bytes(),
-        usage: wgpu::BufferUsages::STORAGE,
+        contents: &[char],
+        usage: wgpu::BufferUsages::UNIFORM,
     });
 
     let data_len_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

@@ -1,6 +1,5 @@
 #![cfg_attr(target_arch = "spirv", no_std)]
 // #![deny(warnings)]
-
 use glam::UVec3;
 use spirv_std::{glam, spirv};
 
@@ -12,16 +11,16 @@ fn min(a: u32, b: u32) -> u32 {
     }
 }
 
-fn to_bytes(a: u32) -> [u32; 4] {
-    let mut v = [0u32; 4];
+fn to_bytes(a: u32) -> [u8; 4] {
+    let mut v = [0u8; 4];
     let mut a = a;
-    v[0] = a % 256;
+    v[0] = (a % 256) as u8;
     a /= 256;
-    v[1] = a % 256;
+    v[1] = (a % 256) as u8;
     a /= 256;
-    v[2] = a % 256;
+    v[2] = (a % 256) as u8;
     a /= 256;
-    v[3] = a % 256;
+    v[3] = (a % 256) as u8;
     v
 }
 
@@ -32,7 +31,7 @@ pub fn main_cc(
     #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] input: &mut [u32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] chunk_size: &mut [u32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] data_len: &mut [u32],
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] char: &mut [u32],
+    #[spirv(uniform, descriptor_set = 0, binding = 3)] char: &u8,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] count: &mut [u32],
 ) {
     let index = id.x as usize;
@@ -48,7 +47,7 @@ pub fn main_cc(
         let c = to_bytes(src);
         for i in 0..4 {
             if rem <= i {
-                if (c[i] as u32) == char[0] {
+                if c[i] == *char {
                     count[index] += 1;
                 }
             }
@@ -63,7 +62,7 @@ pub fn main_cc(
         let src: u32 = input[(start + i) / 4];
         let c = to_bytes(src);
         for j in 0..4 {
-            if (i + j) < nelems && (c[j] as u32) == char[0] {
+            if (i + j) < nelems && c[j] == *char {
                 count[index] += 1;
             }
         }
