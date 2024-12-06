@@ -74,7 +74,7 @@ pub async fn run_charcount_shader(
                 ty: wgpu::BindingType::Buffer {
                     has_dynamic_offset: false,
                     min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    ty: wgpu::BufferBindingType::Uniform,
                 },
             },
             wgpu::BindGroupLayoutEntry {
@@ -84,7 +84,7 @@ pub async fn run_charcount_shader(
                 ty: wgpu::BindingType::Buffer {
                     has_dynamic_offset: false,
                     min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    ty: wgpu::BufferBindingType::Uniform,
                 },
             },
             wgpu::BindGroupLayoutEntry {
@@ -143,7 +143,7 @@ pub async fn run_charcount_shader(
     let chunk_size_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Chunk size"),
         contents: &(chunk_size as u32).to_ne_bytes(),
-        usage: wgpu::BufferUsages::STORAGE,
+        usage: wgpu::BufferUsages::UNIFORM,
     });
     eprintln!("  chunk_size={:?}", chunk_size);
 
@@ -156,7 +156,7 @@ pub async fn run_charcount_shader(
     let data_len_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("data_length"),
         contents: &(input.len() as u32).to_ne_bytes(),
-        usage: wgpu::BufferUsages::STORAGE,
+        usage: wgpu::BufferUsages::UNIFORM,
     });
 
     let output_buf = device.create_buffer(&wgpu::BufferDescriptor {

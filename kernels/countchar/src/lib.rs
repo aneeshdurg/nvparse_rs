@@ -29,16 +29,16 @@ fn to_bytes(a: u32) -> [u8; 4] {
 pub fn main_cc(
     #[spirv(global_invocation_id)] id: UVec3,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] input: &mut [u32],
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] chunk_size: &mut [u32],
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] data_len: &mut [u32],
+    #[spirv(uniform, descriptor_set = 0, binding = 1)] chunk_size: &u32,
+    #[spirv(uniform, descriptor_set = 0, binding = 2)] data_len: &u32,
     #[spirv(uniform, descriptor_set = 0, binding = 3)] char: &u8,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] count: &mut [u32],
 ) {
     let index = id.x as usize;
     count[index] = 0;
 
-    let mut start: usize = index * (chunk_size[0] as usize);
-    let mut nelems: usize = min(chunk_size[0], data_len[0] - start as u32) as usize;
+    let mut start: usize = index * (*chunk_size as usize);
+    let mut nelems: usize = min(*chunk_size, *data_len - start as u32) as usize;
 
     let rem = start % 4;
     if rem != 0 {
