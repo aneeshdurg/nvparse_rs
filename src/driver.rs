@@ -211,6 +211,8 @@ pub async fn run_charcount_shader(
 
     eprintln!("Initialization time: {:?}", timer.elapsed());
 
+    let timer = std::time::Instant::now();
+
     let mut offset = 0;
     let mut acc = 0;
     let mut pbar = pbar(Some(input.len()));
@@ -279,5 +281,6 @@ pub async fn run_charcount_shader(
         offset = end;
         let _ = pbar.update(slice.len());
     }
+    println!("Compute time: {:?}", timer.elapsed());
     Ok(acc)
 }
