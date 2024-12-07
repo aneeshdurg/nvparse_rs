@@ -839,6 +839,7 @@ dependencies = [
  "futures",
  "memmap",
  "spirv-builder",
+ "syn 2.0.90",
  "tqdm",
  "wgpu",
 ]

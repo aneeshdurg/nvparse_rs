@@ -4,56 +4,6 @@ use std::fs::File;
 
 pub mod driver;
 
-// fn get_size() -> Result<u32, Box<dyn std::error::Error>> {
-//     if let Ok(size_var) = std::env::var("COMPUTESIZE") {
-//         return Ok(size_var.parse()?);
-//     };
-//     Ok(10000000)
-// }
-//
-fn cpu_reduce(data: Vec<u32>) -> u32 {
-    let mut acc: u32 = 0;
-    for d in data {
-        acc = acc.wrapping_add(d);
-    }
-    acc
-}
-
-// fn reduce(data: Vec<u32>) -> Result<u32, Box<dyn std::error::Error>> {
-//     /// Max number of threads per workgroup
-//     const MAX_WG_SIZE: usize = 65535;
-//
-//     if data.len() < (2 * MAX_WG_SIZE) {
-//         // Insufficient parallelism, reduce on CPU
-//         Ok(cpu_reduce(data))
-//     } else {
-//         // Framework initialization
-//         let fw = Framework::default();
-//
-//         let chunk_size = (data.len() / MAX_WG_SIZE) as u32 + 1;
-//         // GPU buffer creation
-//         let buf_a = GpuBuffer::<u32>::from_slice(&fw, &data);
-//         let buf_chunk_size = GpuBuffer::<u32>::from_slice(&fw, &[chunk_size]);
-//         let buf_data_len = GpuBuffer::<u32>::from_slice(&fw, &[data.len() as u32]);
-//         let buf_c = GpuBuffer::<u32>::with_capacity(&fw, MAX_WG_SIZE as u64);
-//
-//         let shader = Shader::from_wgsl_file(&fw, "./sum.wgsl")?;
-//         // Descriptor set and program creation
-//         let desc = DescriptorSet::default()
-//             .bind_buffer(&buf_a, GpuBufferUsage::ReadOnly)
-//             .bind_buffer(&buf_chunk_size, GpuBufferUsage::ReadOnly)
-//             .bind_buffer(&buf_data_len, GpuBufferUsage::ReadOnly)
-//             .bind_buffer(&buf_c, GpuBufferUsage::ReadWrite);
-//         let program = Program::new(&shader, "main").add_descriptor_set(desc); // Entry point
-//         let kern = Kernel::new(&fw, program);
-//
-//         let mut buf_c_cpu = vec![0u32; MAX_WG_SIZE];
-//         kern.enqueue(MAX_WG_SIZE as u32, 1, 1);
-//         buf_c.read_blocking(&mut buf_c_cpu)?;
-//         Ok(cpu_reduce(buf_c_cpu))
-//     }
-// }
-
 fn cpu_count_char(data: &[u8], char: u8) -> u32 {
     let mut acc = 0;
     for c in data {
@@ -63,9 +13,7 @@ fn cpu_count_char(data: &[u8], char: u8) -> u32 {
 }
 
 fn run_count_char(data: &[u8], char: u8, nthreads: usize) -> u32 {
-    let res =
-        futures::executor::block_on(driver::run_charcount_shader(data, char, nthreads)).unwrap();
-    cpu_reduce(res)
+    futures::executor::block_on(driver::run_charcount_shader(data, char, nthreads)).unwrap()
 }
 
 fn count_char(nthreads: usize, data: &[u8], char: u8) -> Result<u32, Box<dyn std::error::Error>> {
@@ -86,14 +34,6 @@ struct Args {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // let cpu_data = (0..get_size()?).into_iter().collect::<Vec<u32>>();
-    // if let Ok(val) = std::env::var("ONLYCPU") {
-    //     if val == "1" {
-    //         println!("{}", cpu_reduce(cpu_data));
-    //         return Ok(());
-    //     }
-    // }
-    // println!("{}", reduce(cpu_data)?);
     let args = Args::parse();
 
     let file = File::open(&args.filename)?;

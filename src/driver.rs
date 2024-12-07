@@ -3,6 +3,7 @@ use wgpu::util::DeviceExt;
 use futures::channel::oneshot;
 use std::{convert::TryInto, num::NonZeroU64};
 use wgpu::{Adapter, BufferAsyncError, Device, Queue, RequestDeviceError, ShaderModule};
+use tqdm::pbar;
 
 async fn init_adapter() -> Option<Adapter> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
@@ -45,20 +46,18 @@ pub async fn run_charcount_shader(
     input: &[u8],
     char: u8,
     nthreads: usize,
-) -> Result<Vec<u32>, BufferAsyncError> {
+) -> Result<u32, BufferAsyncError> {
     let timer = std::time::Instant::now();
-    eprintln!("run_charcount_shader 0 {:?}", timer.elapsed());
     let adapter = init_adapter().await.expect("Failed to get adapter");
     let (device, queue) = init_device(&adapter)
         .await
         .expect("Failed to create device");
 
     let limits = adapter.limits();
-    eprintln!("LIMITS = {:?}", limits);
+    // eprintln!("LIMITS = {:?}", limits);
     let shader_bytes: &[u8] = include_bytes!(env!("countchar.spv"));
     let module = load_shader_module(&device, shader_bytes);
 
-    eprintln!("run_charcount_shader 1 {:?}", timer.elapsed());
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("mybindgroup"),
         entries: &[
@@ -140,12 +139,13 @@ pub async fn run_charcount_shader(
         mapped_at_creation: false,
     });
 
-    let s = limits.max_storage_buffer_binding_size / 16;
-    // let s = 4096;
+    // TODO(aneesh) why do we need the arbitrary constant to reduce the size by? Using the value
+    // from limits directly throws an error saying that it's too big.
+    let max_buffer_size = limits.max_storage_buffer_binding_size / 16;
 
     let input_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("File Input"),
-        size: s as wgpu::BufferAddress,
+        size: max_buffer_size as wgpu::BufferAddress,
         usage: wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_SRC
             | wgpu::BufferUsages::COPY_DST,
@@ -182,76 +182,54 @@ pub async fn run_charcount_shader(
         mapped_at_creation: false,
     });
 
-    let mut offset = 0;
-    let mut res: Vec<u32> = Vec::new();
-    while offset < input.len() {
-        let end = std::cmp::min(offset + s as usize, input.len());
-        // if offset != 0 {
-        //     // Map the input buffer into memory
-        //     let (resolver, waiter) = oneshot::channel();
-        //     input_buf
-        //         .slice(..)
-        //         .map_async(wgpu::MapMode::Write, move |res| {
-        //             resolver.send(res).unwrap();
-        //         });
-        //     device.poll(wgpu::Maintain::Wait);
-        //     waiter.await.unwrap()?;
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: input_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: chunk_size_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: data_len_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: char_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: output_buf.as_entire_binding(),
+            },
+        ],
+    });
 
-        //     let (resolver, waiter) = oneshot::channel();
-        //     data_len_buf
-        //         .slice(..)
-        //         .map_async(wgpu::MapMode::Write, move |res| {
-        //             resolver.send(res).unwrap();
-        //         });
-        //     device.poll(wgpu::Maintain::Wait);
-        //     waiter.await.unwrap()?;
-        // }
+    eprintln!("Initialization time: {:?}", timer.elapsed());
+
+    let mut offset = 0;
+    let mut acc = 0;
+    let mut pbar = pbar(Some(input.len()));
+    while offset < input.len() {
+        let end = std::cmp::min(offset + max_buffer_size as usize, input.len());
+        // The data to operate on for this iteration
         let slice = &input[offset..end];
+
+        // Write the slice, length of slice, and number of elements per thread to the GPU buffers
         queue.write_buffer(&input_buf, 0, slice);
         queue.write_buffer(&data_len_buf, 0, &(slice.len() as u32).to_ne_bytes());
         let chunk_size: u32 = (slice.len() / nthreads) as u32 + 1;
         queue.write_buffer(&chunk_size_buf, 0, &chunk_size.to_ne_bytes());
-        let encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("GpuBuffer::write"),
+        // Note that the buffers above aren't actually "written" until queue.submit is called
+
+        // Create the compute pass
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("do compute"),
         });
-        queue.submit(Some(encoder.finish()));
-
-        // Unmap buffers so that we can use them from the GPU
-        // input_buf.unmap();
-        // data_len_buf.unmap();
-
-        eprintln!("run_charcount_shader 2 {:?}", timer.elapsed());
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: input_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: chunk_size_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: data_len_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: char_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: output_buf.as_entire_binding(),
-                },
-            ],
-        });
-
-        eprintln!("run_charcount_shader 3 {:?}", timer.elapsed());
-        let mut encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-
         {
             let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: None,
@@ -262,7 +240,7 @@ pub async fn run_charcount_shader(
             cpass.dispatch_workgroups(nthreads as u32, 1, 1);
         }
 
-        eprintln!("run_charcount_shader 4 {:?}", timer.elapsed());
+        // copy the output into a CPU readable buffer
         encoder.copy_buffer_to_buffer(
             &output_buf,
             0,
@@ -271,39 +249,35 @@ pub async fn run_charcount_shader(
             (nthreads * 4) as wgpu::BufferAddress,
         );
 
-        eprintln!("run_charcount_shader 5 {:?}", timer.elapsed());
+        // Run the queued computation
         queue.submit(Some(encoder.finish()));
-        eprintln!("run_charcount_shader 6 {:?}", timer.elapsed());
-        let buffer_slice = readback_buffer.slice(..);
 
-        eprintln!("run_charcount_shader 7 {:?}", timer.elapsed());
+        // Map the readback_buffer to the CPU
+        let buffer_slice = readback_buffer.slice(..);
         let (resolver, waiter) = oneshot::channel();
         buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
             resolver.send(res).unwrap();
         });
+        // Wait for the buffer to be mapped and ready for reading
         device.poll(wgpu::Maintain::Wait);
-        eprintln!("run_charcount_shader 8 {:?}", timer.elapsed());
-
         waiter.await.unwrap()?;
 
-        eprintln!("run_charcount_shader 9 {:?}", timer.elapsed());
+        // Copy from GPU to CPU
         let x = buffer_slice
             .get_mapped_range()
             .chunks_exact(4)
             .map(|b| u32::from_ne_bytes(b.try_into().unwrap()))
             .collect::<Vec<_>>();
+        // Unmap the GPU buffer so that it can be re-used in the next iteration
+        readback_buffer.unmap();
 
-        // TODO(aneesh) do this async, or on the GPU
-        let mut acc = 0;
+        // TODO(aneesh) do this async, or on the GPU - this isn't the bottleneck though, copying is
         for v in &x {
             acc += v;
         }
-        res.push(acc);
 
-        readback_buffer.unmap();
-        eprintln!("bytes={}-{}/{} acc={}", offset, end, input.len(), acc);
-        eprintln!("  x={:?}", x);
         offset = end;
+        let _ = pbar.update(slice.len());
     }
-    Ok(res)
+    Ok(acc)
 }

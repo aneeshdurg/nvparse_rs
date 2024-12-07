@@ -28,7 +28,7 @@ fn to_bytes(a: u32) -> [u8; 4] {
 #[spirv(compute(threads(64)))]
 pub fn main_cc(
     #[spirv(global_invocation_id)] id: UVec3,
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] input: &mut [u32],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] input: &mut [u8],
     #[spirv(uniform, descriptor_set = 0, binding = 1)] chunk_size: &u32,
     #[spirv(uniform, descriptor_set = 0, binding = 2)] data_len: &u32,
     #[spirv(uniform, descriptor_set = 0, binding = 3)] char: &u8,
@@ -40,33 +40,11 @@ pub fn main_cc(
     let mut start: usize = index * (*chunk_size as usize);
     let mut nelems: usize = min(*chunk_size, *data_len - start as u32) as usize;
 
-    let rem = start % 4;
-    if rem != 0 {
-        let src: u32 = input[start / 4];
-
-        let c = to_bytes(src);
-        for i in 0..4 {
-            if rem <= i {
-                if c[i] == *char {
-                    count[index] += 1;
-                }
-            }
-        }
-
-        start = start + 4 - rem;
-        nelems = nelems - (4 - rem);
-    }
-
     let mut i = 0;
-    while i < nelems {
-        let src: u32 = input[(start + i) / 4];
-        let c = to_bytes(src);
-        for j in 0..4 {
-            if (i + j) < nelems && c[j] == *char {
-                count[index] += 1;
-            }
-        }
+    for i in start..(start + nelems) {
+        if input[i] == *char {
+            count[index] += 1;
 
-        i += 4;
+        }
     }
 }
