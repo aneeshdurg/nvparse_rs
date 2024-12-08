@@ -2,8 +2,8 @@ use wgpu::util::DeviceExt;
 
 use futures::channel::oneshot;
 use std::{convert::TryInto, num::NonZeroU64};
-use wgpu::{Adapter, BufferAsyncError, Device, Queue, RequestDeviceError, ShaderModule};
 use tqdm::pbar;
+use wgpu::{Adapter, BufferAsyncError, Device, Queue, RequestDeviceError, ShaderModule};
 
 async fn init_adapter() -> Option<Adapter> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
@@ -222,10 +222,33 @@ pub async fn run_charcount_shader(
         let slice = &input[offset..end];
 
         // Write the slice, length of slice, and number of elements per thread to the GPU buffers
-        queue.write_buffer(&input_buf, 0, slice);
-        queue.write_buffer(&data_len_buf, 0, &(slice.len() as u32).to_ne_bytes());
+        let mut write_view = queue
+            .write_buffer_with(&input_buf, 0, (slice.len() as u64).try_into().unwrap())
+            .unwrap();
+        write_view.as_mut().clone_from_slice(slice);
+        drop(write_view);
+
+        let data_len: u32 = slice.len() as u32;
+        let mut write_view = queue
+            .write_buffer_with(&data_len_buf, 0, std::num::NonZero::<u64>::new(4).unwrap())
+            .unwrap();
+        write_view
+            .as_mut()
+            .clone_from_slice(&data_len.to_ne_bytes());
+        drop(write_view);
+
         let chunk_size: u32 = (slice.len() / nthreads) as u32 + 1;
-        queue.write_buffer(&chunk_size_buf, 0, &chunk_size.to_ne_bytes());
+        let mut write_view = queue
+            .write_buffer_with(
+                &chunk_size_buf,
+                0,
+                std::num::NonZero::<u64>::new(4).unwrap(),
+            )
+            .unwrap();
+        write_view
+            .as_mut()
+            .clone_from_slice(&chunk_size.to_ne_bytes());
+        drop(write_view);
         // Note that the buffers above aren't actually "written" until queue.submit is called
 
         // Create the compute pass
