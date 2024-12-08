@@ -281,6 +281,7 @@ pub async fn run_charcount_shader(
         offset = end;
         let _ = pbar.update(slice.len());
     }
+    drop(pbar);
     println!("Compute time: {:?}", timer.elapsed());
     Ok(acc)
 }
