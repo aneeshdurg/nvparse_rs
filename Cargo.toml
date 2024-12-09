@@ -17,3 +17,9 @@ syn = { version = "2.0.90", features = ["full"] }
 
 [profile.release]
 debug = true
+
+[profile.release.build-override]
+opt-level = 3
+codegen-units = 16
+[profile.dev.build-override]
+opt-level = 3

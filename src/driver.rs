@@ -22,6 +22,7 @@ async fn init_device(adapter: &Adapter) -> Result<(Device, Queue), RequestDevice
             &wgpu::DeviceDescriptor {
                 label: Some("mydevice"),
                 required_features: wgpu::Features::TIMESTAMP_QUERY
+                    | wgpu::Features::MAPPABLE_PRIMARY_BUFFERS
                     | wgpu::Features::SPIRV_SHADER_PASSTHROUGH,
                 required_limits: Default::default(),
                 memory_hints: Default::default(),
@@ -40,6 +41,12 @@ fn load_shader_module(device: &Device, shader_bytes: &[u8]) -> ShaderModule {
 
     // Load the shaders from disk
     unsafe { device.create_shader_module_spirv(&shader_binary) }
+}
+
+fn store_u32(queue: &Queue, buffer: &wgpu::Buffer, value: u32) {
+    let bytes_per_u32 = std::num::NonZero::<u64>::new(4).unwrap();
+    let mut write_view = queue.write_buffer_with(&buffer, 0, bytes_per_u32).unwrap();
+    write_view.as_mut().clone_from_slice(&value.to_ne_bytes());
 }
 
 pub async fn run_charcount_shader(
@@ -147,6 +154,7 @@ pub async fn run_charcount_shader(
         label: Some("File Input"),
         size: max_buffer_size as wgpu::BufferAddress,
         usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::MAP_WRITE
             | wgpu::BufferUsages::COPY_SRC
             | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
@@ -216,40 +224,35 @@ pub async fn run_charcount_shader(
     let mut offset = 0;
     let mut acc = 0;
     let mut pbar = pbar(Some(input.len()));
+
+    let mut input_write_dur = std::time::Duration::ZERO;
     while offset < input.len() {
         let end = std::cmp::min(offset + max_buffer_size as usize, input.len());
         // The data to operate on for this iteration
         let slice = &input[offset..end];
 
         // Write the slice, length of slice, and number of elements per thread to the GPU buffers
-        let mut write_view = queue
-            .write_buffer_with(&input_buf, 0, (slice.len() as u64).try_into().unwrap())
-            .unwrap();
-        write_view.as_mut().clone_from_slice(slice);
-        drop(write_view);
+        // Note that these buffers above aren't actually "written" until queue.submit is called
 
-        let data_len: u32 = slice.len() as u32;
-        let mut write_view = queue
-            .write_buffer_with(&data_len_buf, 0, std::num::NonZero::<u64>::new(4).unwrap())
-            .unwrap();
-        write_view
-            .as_mut()
-            .clone_from_slice(&data_len.to_ne_bytes());
-        drop(write_view);
+        // Map the input buffer into memory to avoid intermediate copying
+        let input_write_timer = std::time::Instant::now();
+        let (resolver, waiter) = oneshot::channel();
+        let input_slice = input_buf.slice(0..(slice.len() as u64));
+        input_slice.map_async(wgpu::MapMode::Write, move |res| {
+            resolver.send(res).unwrap();
+        });
+        // Wait for the buffer to be mapped and ready for writing
+        device.poll(wgpu::Maintain::Wait);
+        waiter.await.unwrap()?;
+        input_slice.get_mapped_range_mut().clone_from_slice(slice);
+        // Unmap the GPU buffer so that it can be used in the shader
+        input_buf.unmap();
+        input_write_dur += input_write_timer.elapsed();
 
+        // For storing a single u32 into a buffer, the intermediate copy isn't expensive
+        store_u32(&queue, &data_len_buf, slice.len() as u32);
         let chunk_size: u32 = (slice.len() / nthreads) as u32 + 1;
-        let mut write_view = queue
-            .write_buffer_with(
-                &chunk_size_buf,
-                0,
-                std::num::NonZero::<u64>::new(4).unwrap(),
-            )
-            .unwrap();
-        write_view
-            .as_mut()
-            .clone_from_slice(&chunk_size.to_ne_bytes());
-        drop(write_view);
-        // Note that the buffers above aren't actually "written" until queue.submit is called
+        store_u32(&queue, &chunk_size_buf, chunk_size);
 
         // Create the compute pass
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -306,5 +309,6 @@ pub async fn run_charcount_shader(
     }
     drop(pbar);
     println!("Compute time: {:?}", timer.elapsed());
+    println!("  input write time: {:?}", input_write_dur);
     Ok(acc)
 }
