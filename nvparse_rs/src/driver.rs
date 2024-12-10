@@ -65,7 +65,7 @@ fn consume_buffer(
     let mut compute_pbar = pbar(Some(total_len));
 
     let shader_bytes: &[u8] = include_bytes!(env!("countchar.spv"));
-    let module = load_shader_module(&device, shader_bytes);
+    let countchar_module = load_shader_module(&device, shader_bytes);
 
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("mybindgroup"),
@@ -134,7 +134,7 @@ fn consume_buffer(
     let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("MyPipeline"),
         layout: Some(&pipeline_layout),
-        module: &module,
+        module: &countchar_module,
         entry_point: Some("main_cc"),
         compilation_options: Default::default(),
         cache: None,

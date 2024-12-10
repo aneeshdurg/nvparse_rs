@@ -1,25 +1,8 @@
-[package]
-name = "nvparse_rs"
-version = "0.1.0"
-edition = "2021"
+[workspace]
 
-[dependencies]
-clap = { version = "4.5.22", features = ["derive"] }
-memmap = "0.7.0"
-tqdm = "0.7.0"
-futures = "0.3.31"
-wgpu = { version = "23.0.1", features = ["spirv"] }
-
-[build-dependencies]
-spirv-builder = { git = "https://github.com/rust-gpu/rust-gpu" }
-syn = { version = "2.0.90", features = ["full"] }
-
-
-[profile.release]
-debug = true
-
-[profile.release.build-override]
-opt-level = 3
-codegen-units = 16
-[profile.dev.build-override]
-opt-level = 3
+resolver = "2"
+members = [
+  "nvparse_rs",
+  "kernels/countchar",
+  "kernels/getcharpos",
+]
