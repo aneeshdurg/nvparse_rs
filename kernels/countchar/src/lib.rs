@@ -3,14 +3,6 @@
 use glam::UVec3;
 use spirv_std::{glam, spirv};
 
-fn min(a: u32, b: u32) -> u32 {
-    if a < b {
-        a
-    } else {
-        b
-    }
-}
-
 // LocalSize/numthreads of (x = 64, y = 1, z = 1)
 #[spirv(compute(threads(64)))]
 pub fn main_cc(
@@ -25,7 +17,7 @@ pub fn main_cc(
     count[index] = 0;
 
     let start: usize = index * (*chunk_size as usize);
-    let nelems: usize = min(*chunk_size, *data_len - start as u32) as usize;
+    let nelems: usize = core::cmp::min(*chunk_size, *data_len - start as u32) as usize;
 
     for i in start..(start + nelems) {
         if input[i] == *char {
