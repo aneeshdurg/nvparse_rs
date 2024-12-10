@@ -2,7 +2,6 @@
 use clap::Parser;
 use memmap::MmapOptions;
 use std::fs::File;
-use tqdm::tqdm;
 
 pub mod driver;
 

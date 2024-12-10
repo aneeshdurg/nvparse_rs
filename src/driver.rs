@@ -56,19 +56,127 @@ fn consume_buffer(
     total_len: usize,
     device: std::sync::Arc<Device>,
     queue: &Queue,
-    compute_pipeline: &wgpu::ComputePipeline,
-    bind_group_layout: &wgpu::BindGroupLayout,
-    input_bufs: &std::sync::Arc<[wgpu::Buffer; 10]>,
-    data_len_buf: &wgpu::Buffer,
-    chunk_size_buf: &wgpu::Buffer,
-    char_buf: &wgpu::Buffer,
-    output_buf: &wgpu::Buffer,
-    readback_buffer: &wgpu::Buffer,
+    input_bufs: &std::sync::Arc<Vec<wgpu::Buffer>>,
+    char: u8,
     receiver: mpsc::Receiver<(usize, usize, usize)>,
     free_buffer: mpsc::Sender<usize>,
 ) -> u32 {
     let mut acc = 0;
     let mut compute_pbar = pbar(Some(total_len));
+
+    let shader_bytes: &[u8] = include_bytes!(env!("countchar.spv"));
+    let module = load_shader_module(&device, shader_bytes);
+
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("mybindgroup"),
+        entries: &[
+            // XXX - some graphics cards do not support empty bind layout groups, so
+            // create a dummy entry.
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                count: None,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(NonZeroU64::new(1).unwrap()),
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                },
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                count: None,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(NonZeroU64::new(1).unwrap()),
+                    ty: wgpu::BufferBindingType::Uniform,
+                },
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                count: None,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(NonZeroU64::new(1).unwrap()),
+                    ty: wgpu::BufferBindingType::Uniform,
+                },
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                count: None,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(NonZeroU64::new(1).unwrap()),
+                    ty: wgpu::BufferBindingType::Uniform,
+                },
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                count: None,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(NonZeroU64::new(1).unwrap()),
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                },
+            },
+        ],
+    });
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("mylayout"),
+        bind_group_layouts: &[&bind_group_layout],
+        push_constant_ranges: &[],
+    });
+
+    let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("MyPipeline"),
+        layout: Some(&pipeline_layout),
+        module: &module,
+        entry_point: Some("main_cc"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+
+    let readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("readback_buffer"),
+        size: (nthreads * 4) as wgpu::BufferAddress,
+        // Can be read to the CPU, and can be copied from the shader's storage buffer
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let chunk_size_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Chunk size"),
+        size: 4,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let char_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Character to match"),
+        contents: &[char],
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+
+    let data_len_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("data_length"),
+        size: 4,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let output_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("count (output)"),
+        size: (nthreads * 4) as wgpu::BufferAddress,
+        // Can be read to the CPU, and can be copied from the shader's storage buffer
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
 
     loop {
         let (offset, end, input_buf_id) = receiver.recv().unwrap();
@@ -162,6 +270,7 @@ fn consume_buffer(
         if end == total_len {
             break;
         }
+        // Mark the input buffer as ready for writing again
         free_buffer
             .send(input_buf_id)
             .expect("semaphore add failed");
@@ -177,7 +286,6 @@ pub async fn run_charcount_shader(
 ) -> Result<u32, BufferAsyncError> {
     let total_len = input.len();
 
-    let timer = std::time::Instant::now();
     let adapter = init_adapter().await.expect("Failed to get adapter");
     let (device, queue) = init_device(&adapter)
         .await
@@ -186,226 +294,27 @@ pub async fn run_charcount_shader(
 
     let limits = adapter.limits();
     // eprintln!("LIMITS = {:?}", limits);
-    let shader_bytes: &[u8] = include_bytes!(env!("countchar.spv"));
-    let module = load_shader_module(&device, shader_bytes);
-
-    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("mybindgroup"),
-        entries: &[
-            // XXX - some graphics cards do not support empty bind layout groups, so
-            // create a dummy entry.
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                count: None,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    has_dynamic_offset: false,
-                    min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                },
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                count: None,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    has_dynamic_offset: false,
-                    min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                    ty: wgpu::BufferBindingType::Uniform,
-                },
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                count: None,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    has_dynamic_offset: false,
-                    min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                    ty: wgpu::BufferBindingType::Uniform,
-                },
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 3,
-                count: None,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    has_dynamic_offset: false,
-                    min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                    ty: wgpu::BufferBindingType::Uniform,
-                },
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 4,
-                count: None,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    has_dynamic_offset: false,
-                    min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                },
-            },
-        ],
-    });
-
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("mylayout"),
-        bind_group_layouts: &[&bind_group_layout],
-        push_constant_ranges: &[],
-    });
-
-    let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("MyPipeline"),
-        layout: Some(&pipeline_layout),
-        module: &module,
-        entry_point: Some("main_cc"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-
-    let readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("readback_buffer"),
-        size: (nthreads * 4) as wgpu::BufferAddress,
-        // Can be read to the CPU, and can be copied from the shader's storage buffer
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-
-    // TODO(aneesh) why do we need the arbitrary constant to reduce the size by? Using the value
-    // from limits directly throws an error saying that it's too big.
+    // Using a smaller size here seems to have better performance. Maybe because it provides more
+    // opportunities for compute to overlap with IO, hiding the latency?
     let max_buffer_size = limits.max_storage_buffer_binding_size / 16;
-
-    let input_bufs = std::sync::Arc::new([
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("File Input 0"),
+    const N_INPUT_BUFS: usize = 8;
+    let mut input_bufs = Vec::new();
+    for i in 0..N_INPUT_BUFS {
+        input_bufs.push(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(&format!("File Input {}", i)),
             size: max_buffer_size as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::MAP_WRITE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
-        }),
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("File Input 1"),
-            size: max_buffer_size as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::MAP_WRITE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }),
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("File Input 2"),
-            size: max_buffer_size as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::MAP_WRITE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }),
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("File Input 3"),
-            size: max_buffer_size as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::MAP_WRITE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }),
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("File Input 4"),
-            size: max_buffer_size as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::MAP_WRITE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }),
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("File Input 5"),
-            size: max_buffer_size as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::MAP_WRITE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }),
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("File Input 6"),
-            size: max_buffer_size as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::MAP_WRITE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }),
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("File Input 7"),
-            size: max_buffer_size as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::MAP_WRITE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }),
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("File Input 8"),
-            size: max_buffer_size as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::MAP_WRITE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }),
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("File Input 9"),
-            size: max_buffer_size as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::MAP_WRITE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }),
-    ]);
+        }));
+    }
+    let input_bufs = std::sync::Arc::new(input_bufs);
 
-    let chunk_size_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Chunk size"),
-        size: 4,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-
-    let char_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Character to match"),
-        contents: &[char],
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
-
-    let data_len_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("data_length"),
-        size: 4,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-
-    let output_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("count (output)"),
-        size: (nthreads * 4) as wgpu::BufferAddress,
-        // Can be read to the CPU, and can be copied from the shader's storage buffer
-        usage: wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_SRC
-            | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-
-    eprintln!("Initialization time: {:?}", timer.elapsed());
-
-    let io_timer = std::time::Instant::now();
-
-    // let mut io_pbar = pbar(Some(total_len));
-
-    //  let mut input_write_dur = std::time::Duration::ZERO;
-    //  let mut n_iters = 0;
-
+    // This channel marks input buffs in the vector above as "free" for writing or "allocated" for
+    // compute. A producer will need to allocate buffers and transfer them to the consumer, which
+    // will then free the buffer.
     let (free_buffer, allocate_buffer) = mpsc::channel();
     for i in 0..input_bufs.len() {
         free_buffer
@@ -415,6 +324,7 @@ pub async fn run_charcount_shader(
 
     let (sender, receiver) = mpsc::channel();
 
+    // Takes filled in buffers and run the compute kernel on the GPU
     let consumer = {
         let input_bufs = input_bufs.clone();
         let device = device.clone();
@@ -425,14 +335,8 @@ pub async fn run_charcount_shader(
                 total_len,
                 device,
                 &queue,
-                &compute_pipeline,
-                &bind_group_layout,
                 &input_bufs,
-                &data_len_buf,
-                &chunk_size_buf,
-                &char_buf,
-                &output_buf,
-                &readback_buffer,
+                char,
                 receiver,
                 free_buffer,
             );
@@ -441,8 +345,10 @@ pub async fn run_charcount_shader(
         })
     };
 
+    // Copy chunks into buffers that aren't currently in-use
     let mut offset = 0;
     while offset < total_len {
+        // Get a buffer that is not in use
         let input_buf_id = allocate_buffer.recv().unwrap();
         let end = std::cmp::min(offset + max_buffer_size as usize, total_len);
         let slice = &input[offset..end];
@@ -465,16 +371,9 @@ pub async fn run_charcount_shader(
             .send((offset, end, input_buf_id))
             .expect("send failed");
 
-        // let _ = io_pbar.update(end - offset);
         offset = end;
     }
 
-    // drop(io_pbar);
-    // eprintln!("IO time: {:?}", io_timer.elapsed());
-
     let acc = consumer.join().expect("Thread failed");
-
-    // println!("  input write time: {:?}", input_write_dur);
-    // println!("  n_iters: {:?}", n_iters);
     Ok(acc)
 }
