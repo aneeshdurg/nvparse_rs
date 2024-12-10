@@ -340,7 +340,7 @@ pub async fn run_charcount_shader(
                 receiver,
                 free_buffer,
             );
-            println!("Compute time: {:?}", timer.elapsed());
+            eprintln!("GPU time: {:?} (res={})", timer.elapsed(), res);
             res
         })
     };

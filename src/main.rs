@@ -9,13 +9,16 @@ fn cpu_count_char(data: &[u8], char: u8) -> u32 {
     let mut acc = 0;
     let mut pbar = tqdm::pbar(Some(data.len()));
     let mut i = 0;
+    let mut last_update = 0;
     for c in data {
         acc += if *c == char { 1 } else { 0 };
         i += 1;
         if i % 1024 == 0 {
             let _ = pbar.update(1024);
+            last_update = i;
         }
     }
+    let _ = pbar.update(data.len() - last_update);
     acc
 }
 
@@ -47,10 +50,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mmap = unsafe { MmapOptions::new().map(&file)? };
 
     let nlines = count_char(args.nthreads, &mmap, b'\n')?;
-    println!("{}", nlines);
 
     let timer = std::time::Instant::now();
     let cpures = cpu_count_char(&mmap, b'\n');
-    println!("CPU time: {:?} (res={})", timer.elapsed(), cpures);
+    eprintln!("CPU time: {:?} (res={})", timer.elapsed(), cpures);
+
+    println!("{}", nlines);
     Ok(())
 }
