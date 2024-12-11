@@ -5,4 +5,5 @@ members = [
   "nvparse_rs",
   "kernels/countchar",
   "kernels/getcharpos",
+  "kernels/parsecsv"
 ]

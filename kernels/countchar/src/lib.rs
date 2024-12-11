@@ -3,7 +3,6 @@
 use glam::UVec3;
 use spirv_std::{glam, spirv};
 
-// LocalSize/numthreads of (x = 64, y = 1, z = 1)
 #[spirv(compute(threads(64)))]
 pub fn main_cc(
     #[spirv(global_invocation_id)] id: UVec3,
