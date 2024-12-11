@@ -1,6 +1,7 @@
 use wgpu::util::DeviceExt;
 
 use futures::channel::oneshot;
+use std::ops::RangeBounds;
 use std::sync::mpsc;
 use std::thread;
 use std::{convert::TryInto, num::NonZeroU64};
@@ -49,6 +50,65 @@ fn store_u32(queue: &Queue, buffer: &wgpu::Buffer, value: u32) {
     let bytes_per_u32 = std::num::NonZero::<u64>::new(4).unwrap();
     let mut write_view = queue.write_buffer_with(&buffer, 0, bytes_per_u32).unwrap();
     write_view.as_mut().clone_from_slice(&value.to_ne_bytes());
+}
+
+fn bind_buffers_and_run(
+    encoder: &mut wgpu::CommandEncoder,
+    device: &Device,
+    compute_pipeline: &wgpu::ComputePipeline,
+    layout: &wgpu::BindGroupLayout,
+    buffers: &[&wgpu::Buffer],
+    workgroups: (u32, u32, u32),
+) {
+    let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+        label: None,
+        timestamp_writes: None,
+    });
+
+    let entries: &Vec<wgpu::BindGroupEntry<'_>> = &buffers
+        .iter()
+        .enumerate()
+        .map(|(i, b)| wgpu::BindGroupEntry {
+            binding: i as u32,
+            resource: b.as_entire_binding(),
+        })
+        .collect();
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout,
+        entries,
+    });
+    cpass.set_bind_group(0, &bind_group, &[]);
+    cpass.set_pipeline(&compute_pipeline);
+    cpass.dispatch_workgroups(workgroups.0, workgroups.1, workgroups.2);
+}
+
+fn read_buffer<S: RangeBounds<wgpu::BufferAddress>>(
+    device: &Device,
+    buffer: &wgpu::Buffer,
+    range: S,
+) -> Vec<u32> {
+    // Map the readback_buffer to the CPU
+    let buffer_slice = buffer.slice(range);
+    let (resolver, waiter) = oneshot::channel();
+    buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
+        resolver.send(res).unwrap();
+    });
+    // Wait for the buffer to be mapped and ready for reading
+    device.poll(wgpu::Maintain::Wait);
+    futures::executor::block_on(waiter)
+        .unwrap()
+        .expect("Mapping failed");
+
+    // Copy from GPU to CPU
+    let x = buffer_slice
+        .get_mapped_range()
+        .chunks_exact(4)
+        .map(|b| u32::from_ne_bytes(b.try_into().unwrap()))
+        .collect::<Vec<_>>();
+    // Unmap the GPU buffer so that it can be re-used in the next iteration
+    buffer.unmap();
+    x
 }
 
 fn consume_buffer(
@@ -228,14 +288,6 @@ fn consume_buffer(
             cache: None,
         });
 
-    let readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("readback_buffer"),
-        size: (nthreads * 4) as wgpu::BufferAddress,
-        // Can be read to the CPU, and can be copied from the shader's storage buffer
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-
     let chunk_size_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Chunk size"),
         size: 4,
@@ -261,11 +313,13 @@ fn consume_buffer(
         size: (nthreads * 4) as wgpu::BufferAddress,
         // Can be read to the CPU, and can be copied from the shader's storage buffer
         usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::MAP_READ
             | wgpu::BufferUsages::COPY_SRC
             | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
 
+    let mut prev_input_buf_id = 0;
     loop {
         let (offset, end, input_buf_id) = receiver.recv().unwrap();
         let data_len = (end - offset) as u32;
@@ -278,81 +332,26 @@ fn consume_buffer(
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("do compute"),
         });
-        {
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: None,
-                timestamp_writes: None,
-            });
-            let input_buf: &wgpu::Buffer = &input_bufs[input_buf_id];
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &countchar_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: input_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: chunk_size_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: data_len_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: char_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: output_buf.as_entire_binding(),
-                    },
-                ],
-            });
-            cpass.set_bind_group(0, &bind_group, &[]);
-            cpass.set_pipeline(&countchar_compute_pipeline);
-            cpass.dispatch_workgroups(nthreads as u32 / 64, 1, 1);
-        }
-
-        // copy the output into a CPU readable buffer
-        encoder.copy_buffer_to_buffer(
-            &output_buf,
-            0,
-            &readback_buffer,
-            0,
-            (nthreads * 4) as wgpu::BufferAddress,
+        bind_buffers_and_run(
+            &mut encoder,
+            &device,
+            &countchar_compute_pipeline,
+            &countchar_bind_group_layout,
+            &[
+                &input_bufs[input_buf_id],
+                &chunk_size_buf,
+                &data_len_buf,
+                &char_buf,
+                &output_buf,
+            ],
+            (nthreads as u32 / 64, 1, 1),
         );
 
         // Run the queued computation
         queue.submit(Some(encoder.finish()));
 
-        // Map the readback_buffer to the CPU
-        let buffer_slice = readback_buffer.slice(..);
-        let (resolver, waiter) = oneshot::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
-            resolver.send(res).unwrap();
-        });
-        // Wait for the buffer to be mapped and ready for reading
-        device.poll(wgpu::Maintain::Wait);
-        futures::executor::block_on(waiter)
-            .unwrap()
-            .expect("Mapping failed");
-
-        // Copy from GPU to CPU
-        let x = buffer_slice
-            .get_mapped_range()
-            .chunks_exact(4)
-            .map(|b| u32::from_ne_bytes(b.try_into().unwrap()))
-            .collect::<Vec<_>>();
-        // Unmap the GPU buffer so that it can be re-used in the next iteration
-        readback_buffer.unmap();
-
-        // TODO(aneesh) do this async, or on the GPU - this isn't the bottleneck though, copying is
-        let mut nlines: u32 = 0;
-        for v in &x {
-            nlines += v;
-        }
+        let nlines_per_thread = read_buffer(&device, &output_buf, ..);
+        let nlines = nlines_per_thread.iter().fold(0, |acc, e| acc + *e);
         acc += nlines;
 
         let charpos_output_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -370,70 +369,24 @@ fn consume_buffer(
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("get char positions"),
         });
-        {
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: None,
-                timestamp_writes: None,
-            });
-            let input_buf: &wgpu::Buffer = &input_bufs[input_buf_id];
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &getcharpos_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: input_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: chunk_size_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: data_len_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: char_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: output_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: charpos_output_buf.as_entire_binding(),
-                    },
-                ],
-            });
-            cpass.set_bind_group(0, &bind_group, &[]);
-            cpass.set_pipeline(&getcharpos_compute_pipeline);
-            cpass.dispatch_workgroups(nthreads as u32 / 64, 1, 1);
-        }
+        bind_buffers_and_run(
+            &mut encoder,
+            &device,
+            &getcharpos_compute_pipeline,
+            &getcharpos_bind_group_layout,
+            &[
+                &input_bufs[input_buf_id],
+                &chunk_size_buf,
+                &data_len_buf,
+                &char_buf,
+                &output_buf,
+                &charpos_output_buf,
+            ],
+            (nthreads as u32 / 64, 1, 1),
+        );
 
         // Run the queued computation
         queue.submit(Some(encoder.finish()));
-
-        // Map the readback_buffer to the CPU
-        let buffer_slice = charpos_output_buf.slice(..);
-        let (resolver, waiter) = oneshot::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
-            resolver.send(res).unwrap();
-        });
-        // Wait for the buffer to be mapped and ready for reading
-        device.poll(wgpu::Maintain::Wait);
-        futures::executor::block_on(waiter)
-            .unwrap()
-            .expect("Mapping failed");
-
-        // Copy from GPU to CPU
-        let x = buffer_slice
-            .get_mapped_range()
-            .chunks_exact(4)
-            .map(|b| offset as u32 + u32::from_ne_bytes(b.try_into().unwrap()))
-            .collect::<Vec<_>>();
-        charpos_output_buf.unmap();
-        eprintln!("start of line positions: {:?}:", x);
 
         let _ = compute_pbar.update(data_len as usize);
 
@@ -442,9 +395,11 @@ fn consume_buffer(
         }
         // Mark the input buffer as ready for writing again
         free_buffer
-            .send(input_buf_id)
+            .send(prev_input_buf_id)
             .expect("semaphore add failed");
+        prev_input_buf_id = input_buf_id;
     }
+
     drop(compute_pbar);
     acc
 }
@@ -467,6 +422,7 @@ pub async fn run_charcount_shader(
     // Using a smaller size here seems to have better performance. Maybe because it provides more
     // opportunities for compute to overlap with IO, hiding the latency?
     let max_buffer_size = limits.max_storage_buffer_binding_size / 16;
+    println!("max_buffer_size {}", max_buffer_size);
     const N_INPUT_BUFS: usize = 8;
     let mut input_bufs = Vec::new();
     for i in 0..N_INPUT_BUFS {

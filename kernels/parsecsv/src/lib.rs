@@ -10,7 +10,7 @@ pub fn main_cc(
     //  residual[residual_offset:] + input[:line_start_offsets[0]])
     #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] residual: &mut [u8],
     #[spirv(uniform, descriptor_set = 0, binding = 1)] residual_len: &u32,
-    #[spirv(uniform, descriptor_set = 0, binding = 2)] residual_offset: &u32,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] residual_line_start_offsets: &[u32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] input: &mut [u8],
     #[spirv(uniform, descriptor_set = 0, binding = 6)] char: &u8,
     // min(chunk_lines, line_start_offsets.len() - chunk_lines * id.x) is the number of lines to
