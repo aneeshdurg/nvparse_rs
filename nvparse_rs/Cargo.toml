@@ -10,6 +10,9 @@ tqdm = "0.7.0"
 futures = "0.3.31"
 wgpu = { version = "23.0.1", features = ["spirv"] }
 
+countchar = { path = "../kernels/countchar" }
+parsecsv = { path = "../kernels/parsecsv" }
+
 [build-dependencies]
 spirv-builder = { git = "https://github.com/rust-gpu/rust-gpu" }
 syn = { version = "2.0.90", features = ["full"] }

@@ -124,68 +124,11 @@ fn consume_buffer(
     let mut acc = 0;
     let mut compute_pbar = pbar(Some(total_len));
 
-    let shader_bytes: &[u8] = include_bytes!(env!("countchar.spv"));
-    let countchar_module = load_shader_module(&device, shader_bytes);
+    let countchar_gen = countchar::codegen::new(&device, include_bytes!(env!("countchar.spv")));
+    let _parsecsv_gen = parsecsv::codegen::new(&device, include_bytes!(env!("parsecsv.spv")));
 
     let shader_bytes: &[u8] = include_bytes!(env!("getcharpos.spv"));
     let getcharpos_module = load_shader_module(&device, shader_bytes);
-
-    let countchar_bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("countchar_bind_group_layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    count: None,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        has_dynamic_offset: false,
-                        min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    },
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    count: None,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        has_dynamic_offset: false,
-                        min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                        ty: wgpu::BufferBindingType::Uniform,
-                    },
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    count: None,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        has_dynamic_offset: false,
-                        min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                        ty: wgpu::BufferBindingType::Uniform,
-                    },
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    count: None,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        has_dynamic_offset: false,
-                        min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                        ty: wgpu::BufferBindingType::Uniform,
-                    },
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    count: None,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        has_dynamic_offset: false,
-                        min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    },
-                },
-            ],
-        });
 
     let getcharpos_bind_group_layout =
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -254,28 +197,11 @@ fn consume_buffer(
             ],
         });
 
-    let countchar_pipeline_layout =
-        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("mylayout"),
-            bind_group_layouts: &[&countchar_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-
     let getcharpos_pipeline_layout =
         device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("mylayout"),
             bind_group_layouts: &[&getcharpos_bind_group_layout],
             push_constant_ranges: &[],
-        });
-
-    let countchar_compute_pipeline =
-        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("countchar_compute_pipeline"),
-            layout: Some(&countchar_pipeline_layout),
-            module: &countchar_module,
-            entry_point: Some("main_cc"),
-            compilation_options: Default::default(),
-            cache: None,
         });
 
     let getcharpos_compute_pipeline =
@@ -319,7 +245,6 @@ fn consume_buffer(
         mapped_at_creation: false,
     });
 
-    let mut prev_input_buf_id = 0;
     loop {
         let (offset, end, input_buf_id) = receiver.recv().unwrap();
         let data_len = (end - offset) as u32;
@@ -335,8 +260,8 @@ fn consume_buffer(
         bind_buffers_and_run(
             &mut encoder,
             &device,
-            &countchar_compute_pipeline,
-            &countchar_bind_group_layout,
+            &countchar_gen.compute_pipeline,
+            &countchar_gen.bind_group_layout,
             &[
                 &input_bufs[input_buf_id],
                 &chunk_size_buf,
@@ -344,7 +269,7 @@ fn consume_buffer(
                 &char_buf,
                 &output_buf,
             ],
-            (nthreads as u32 / 64, 1, 1),
+            (nthreads as u32 / countchar_gen.workgroup_dim.x, 1, 1),
         );
 
         // Run the queued computation
@@ -395,9 +320,8 @@ fn consume_buffer(
         }
         // Mark the input buffer as ready for writing again
         free_buffer
-            .send(prev_input_buf_id)
+            .send(input_buf_id)
             .expect("semaphore add failed");
-        prev_input_buf_id = input_buf_id;
     }
 
     drop(compute_pbar);

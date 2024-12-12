@@ -292,7 +292,9 @@ dependencies = [
 name = "countchar"
 version = "0.1.0"
 dependencies = [
+ "kernelcodegen_types",
  "spirv-std",
+ "wgpu",
 ]
 
 [[package]]
@@ -696,6 +698,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernelcodegen_macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
+name = "kernelcodegen_types"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "wgpu",
+]
+
+[[package]]
 name = "khronos-egl"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -866,8 +884,10 @@ name = "nvparse_rs"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "countchar",
  "futures",
  "memmap",
+ "parsecsv",
  "spirv-builder",
  "syn 2.0.90",
  "tqdm",
@@ -916,7 +936,10 @@ dependencies = [
 name = "parsecsv"
 version = "0.1.0"
 dependencies = [
+ "kernelcodegen_macros",
+ "kernelcodegen_types",
  "spirv-std",
+ "wgpu",
 ]
 
 [[package]]

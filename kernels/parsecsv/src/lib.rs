@@ -1,7 +1,9 @@
 #![cfg_attr(target_arch = "spirv", no_std)]
 use glam::UVec3;
+use kernelcodegen_macros::myattr;
 use spirv_std::{glam, spirv};
 
+#[myattr()]
 #[spirv(compute(threads(64)))]
 pub fn main_cc(
     #[spirv(global_invocation_id)] id: UVec3,
