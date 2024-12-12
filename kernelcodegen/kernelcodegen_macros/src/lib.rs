@@ -3,7 +3,7 @@ extern crate proc_macro;
 use std::io::Write;
 
 use proc_macro::TokenStream;
-use proc_macro2::{Delimiter, Group, Ident, Literal, Span, TokenTree};
+use proc_macro2::{Delimiter, Group, Literal, TokenTree};
 use quote::quote;
 
 struct ShaderArg {}

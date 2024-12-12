@@ -1,6 +1,5 @@
 use glam::UVec3;
-use std::num::NonZeroU64;
-use wgpu::{BindGroupLayout, ComputePipeline, Device, PipelineLayout};
+use wgpu::{BindGroupLayout, ComputePipeline, PipelineLayout};
 
 #[cfg(not(target_arch = "spirv"))]
 pub struct Generated {
