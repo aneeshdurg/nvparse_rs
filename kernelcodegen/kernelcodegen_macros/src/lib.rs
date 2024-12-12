@@ -6,11 +6,52 @@ use proc_macro::TokenStream;
 use proc_macro2::{Delimiter, Group, Literal, TokenTree};
 use quote::quote;
 
-struct ShaderArg {}
+enum BindingType {
+    Storage,
+    Uniform,
+}
+
+struct ShaderArg {
+    binding: BindingType,
+    descriptor_id: usize,
+    binding_id: usize,
+}
 
 impl ShaderArg {
-    fn to_bind_group_layout_entry(&self) -> proc_macro2::TokenTree {
-        unimplemented!()
+    fn to_bind_group_layout_entry(&self, i: usize) -> Vec<proc_macro2::TokenTree> {
+        let mut tokens: Vec<proc_macro2::TokenTree> = Vec::new();
+        tokens.extend(quote! { &wgpu::BindGroupLayoutEntry });
+        tokens.push(TokenTree::from(Group::new(Delimiter::Brace, {
+            let mut tokens: Vec<proc_macro2::TokenTree> = Vec::new();
+            tokens.extend(quote! { binding: });
+            tokens.push(TokenTree::from(Literal::usize_unsuffixed(i)));
+            tokens.extend(quote! { count: None, visibility: wgpu::ShaderStages::COMPUTE, });
+            tokens.extend(quote! { ty: wgpu::BindingType::Buffer });
+            tokens.push(TokenTree::from(Group::new(Delimiter::Brace, {
+                let mut tokens: Vec<proc_macro2::TokenTree> = Vec::new();
+                tokens.extend(quote! {
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(NonZeroU64::new(1).unwrap()),
+                    ty:
+                });
+                match self.binding {
+                    BindingType::Storage => {
+                        tokens.extend(
+                            quote! { wgpu::BufferBindingType::Storage { read_only: false } },
+                        );
+                    }
+                    _ => {
+                        tokens.extend(quote! { wgpu::BufferBindingType::Uniform });
+                    }
+                }
+
+                tokens.into_iter().collect()
+            })));
+
+            tokens.into_iter().collect()
+        })));
+
+        tokens
     }
 }
 
@@ -30,8 +71,8 @@ fn create_bind_group_layout_args(mod_name: &str, args: &[ShaderArg]) -> TokenTre
         descriptor_tokens.extend(quote! {, entries: &});
         descriptor_tokens.push(TokenTree::from(Group::new(Delimiter::Bracket, {
             let mut arg_tokens: Vec<proc_macro2::TokenTree> = Vec::new();
-            for arg in args {
-                arg_tokens.push(arg.to_bind_group_layout_entry());
+            for (i, arg) in args.iter().enumerate() {
+                arg_tokens.extend(arg.to_bind_group_layout_entry(i));
                 arg_tokens.extend(quote! {,});
             }
             arg_tokens.into_iter().collect()
@@ -46,12 +87,84 @@ fn create_bind_group_layout_args(mod_name: &str, args: &[ShaderArg]) -> TokenTre
 }
 
 #[proc_macro_attribute]
-pub fn myattr(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn generate_kernel(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let item: proc_macro2::TokenStream = item.into();
+
+    let modname = std::env::var("CARGO_PKG_NAME").unwrap();
+    let mut entrypt = "main_bar".to_owned();
+
+    let mut next_ident_is_entrypt = false;
+    let mut next_group_is_arg_list = false;
+    let mut args: Vec<ShaderArg> = Vec::new();
+
+    for tt in item.clone().into_iter() {
+        match tt {
+            TokenTree::Ident(i) => {
+                if let Some(id) = i.span().source_text() {
+                    if next_ident_is_entrypt {
+                        entrypt = id.to_owned();
+                        next_ident_is_entrypt = false;
+                        next_group_is_arg_list = true;
+                    } else {
+                        if id == "fn" {
+                            next_ident_is_entrypt = true;
+                        }
+                    }
+                }
+            }
+            TokenTree::Group(g) => {
+                if g.delimiter() != Delimiter::Parenthesis || !next_group_is_arg_list {
+                    continue;
+                }
+
+                let mut next_group_is_arg_attr = false;
+                for tt in g.stream().into_iter() {
+                    match tt {
+                        TokenTree::Punct(p) => {
+                            if let Some(c) = p.span().source_text() {
+                                if c == "#" {
+                                    next_group_is_arg_attr = true;
+                                }
+                            }
+                        }
+                        TokenTree::Group(g) => {
+                            if !next_group_is_arg_attr {
+                                continue;
+                            }
+                            assert!(g.delimiter() == Delimiter::Bracket);
+
+                            eprintln!("!!!! arg_attr {:?}", g.stream());
+                            let mut tokens = g.stream().into_iter();
+                            let _token = tokens.next().unwrap();
+                            // TODO assert that _token is Ident("spriv") or Ident(rust_gpu::spriv)
+                            if let TokenTree::Group(g) = tokens.next().unwrap() {
+                                let mut tokens = g.stream().into_iter();
+                                let storage_class = tokens.next();
+                                let _punct = tokens.next();
+                                let _descriptor_set = tokens.next();
+                                let _punct = tokens.next();
+                                let descriptor_set_id = tokens.next();
+                                let _punct = tokens.next();
+                                let _binding = tokens.next();
+                                let binding_id = tokens.next();
+                                eprintln!(
+                                    "!!!! dbg {:?}, {:?}, {:?}",
+                                    storage_class, descriptor_set_id, binding_id,
+                                );
+                            } else {
+                                panic!("Unexpected token");
+                            }
+                            next_group_is_arg_attr = false;
+                        }
+                        _ => {}
+                    }
+                }
+                next_group_is_arg_list = false;
+            }
+            _ => {}
+        }
+    }
     // TODO parse the following from item
-    let args: Vec<ShaderArg> = Vec::new();
-    let modname = "foo";
-    let entrypt = "main_bar";
     let workgroup_dim: (u32, u32, u32) = (0, 0, 0);
 
     let mut tokens: Vec<proc_macro2::TokenTree> = Vec::new();
@@ -64,16 +177,16 @@ pub fn myattr(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Generate module body
     let mut modtokens: Vec<proc_macro2::TokenTree> = Vec::new();
     modtokens.extend(quote! {
-        use kernelcodegen_types::Generated;
+        use kernelcodegen::{ComputeKernel, wgpu};
         use wgpu::Device;
         use crate::glam::UVec3;
 
-        pub fn new(device: &Device, shader_bytes: &[u8]) -> Generated
+        pub fn new(device: &Device, shader_bytes: &[u8]) -> ComputeKernel
     });
 
     let mut fntokens: Vec<proc_macro2::TokenTree> = Vec::new();
     fntokens.extend(quote! { let bind_group_layout = device.create_bind_group_layout });
-    fntokens.push(create_bind_group_layout_args(modname, &args));
+    fntokens.push(create_bind_group_layout_args(&modname, &args));
     fntokens.extend(quote! {;});
 
     fntokens.extend(quote! { let pipeline_layout = device.create_pipeline_layout });
@@ -112,7 +225,7 @@ pub fn myattr(_attr: TokenStream, item: TokenStream) -> TokenStream {
         shader_desc_tokens.extend(quote! {label: Some});
         shader_desc_tokens.push(TokenTree::from(Group::new(
             Delimiter::Parenthesis,
-            [TokenTree::from(Literal::string(modname))]
+            [TokenTree::from(Literal::string(&modname))]
                 .into_iter()
                 .collect(),
         )));
@@ -148,7 +261,7 @@ pub fn myattr(_attr: TokenStream, item: TokenStream) -> TokenStream {
             });
             create_pipeline_fields_tokens.push(TokenTree::from(Group::new(
                 Delimiter::Parenthesis,
-                [TokenTree::from(Literal::string(entrypt))]
+                [TokenTree::from(Literal::string(&entrypt))]
                     .into_iter()
                     .collect(),
             )));
@@ -163,7 +276,7 @@ pub fn myattr(_attr: TokenStream, item: TokenStream) -> TokenStream {
     })));
     fntokens.extend(quote! {;});
 
-    fntokens.extend(quote! { let workgroup_dim = UVec3::from });
+    fntokens.extend(quote! { let workgroup_dim = });
     fntokens.push(TokenTree::from(Group::new(
         Delimiter::Parenthesis,
         [TokenTree::from(Group::new(Delimiter::Parenthesis, {
@@ -180,7 +293,7 @@ pub fn myattr(_attr: TokenStream, item: TokenStream) -> TokenStream {
     )));
     fntokens.extend(quote! {
         ;
-        Generated {
+        ComputeKernel {
             bind_group_layout,
             pipeline_layout,
             compute_pipeline,
@@ -202,18 +315,19 @@ pub fn myattr(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let mut res = proc_macro2::TokenStream::new();
     res.extend(tokens.into_iter().collect::<proc_macro2::TokenStream>());
-    res.extend(item);
+    res.extend(item.clone());
     let res = res.into();
 
     if let Ok(out_dir) = std::env::var("OUT_DIR") {
         let path = std::path::PathBuf::from(out_dir);
-        let path = path.join("myattr.out");
+        let path = path.join("generate_kernel.out.txt");
 
         let mut f = std::fs::File::create(path).unwrap();
-        f.write_all(format!("generated code: {}\n", res).as_bytes())
-            .expect("Write to output failed");
-        f.write_all(format!("tokens: {:?}\n", res).as_bytes())
-            .expect("Write to output failed");
+        let _ = f.write_all(format!("modname: {}\n", modname).as_bytes());
+        let _ = f.write_all(format!("entrypt: {}\n", entrypt).as_bytes());
+        let _ = f.write_all(format!("generated code: {}\n", res).as_bytes());
+        let _ = f.write_all(format!("tokens: {:?}\n", res).as_bytes());
+        let _ = f.write_all(format!("code: {}\n", item).as_bytes());
     }
 
     res

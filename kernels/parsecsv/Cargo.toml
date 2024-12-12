@@ -8,8 +8,4 @@ crate-type = ["dylib", "lib"]
 
 [dependencies]
 spirv-std = { git = "https://github.com/rust-gpu/rust-gpu" }
-kernelcodegen_macros = { path = "../../kernelcodegen/kernelcodegen_macros/" }
-
-[target."cfg(not(target_arch=\"spirv\"))".dependencies]
-kernelcodegen_types = { path = "../../kernelcodegen/kernelcodegen_types/" }
-wgpu = { version = "23.0.1", features = ["spirv"] }
+kernelcodegen = { path = "../../kernelcodegen/kernelcodegen/" }

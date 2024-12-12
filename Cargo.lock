@@ -292,9 +292,8 @@ dependencies = [
 name = "countchar"
 version = "0.1.0"
 dependencies = [
- "kernelcodegen_types",
+ "kernelcodegen",
  "spirv-std",
- "wgpu",
 ]
 
 [[package]]
@@ -698,6 +697,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernelcodegen"
+version = "0.1.0"
+dependencies = [
+ "kernelcodegen_macros",
+ "kernelcodegen_types",
+ "wgpu",
+]
+
+[[package]]
 name = "kernelcodegen_macros"
 version = "0.1.0"
 dependencies = [
@@ -936,10 +944,8 @@ dependencies = [
 name = "parsecsv"
 version = "0.1.0"
 dependencies = [
- "kernelcodegen_macros",
- "kernelcodegen_types",
+ "kernelcodegen",
  "spirv-std",
- "wgpu",
 ]
 
 [[package]]

@@ -7,5 +7,6 @@ members = [
   "kernels/getcharpos",
   "kernels/parsecsv",
   "kernelcodegen/kernelcodegen_macros",
-  "kernelcodegen/kernelcodegen_types"
+  "kernelcodegen/kernelcodegen_types",
+  "kernelcodegen/kernelcodegen"
 ]

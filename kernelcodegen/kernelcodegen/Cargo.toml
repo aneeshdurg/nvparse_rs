@@ -1,0 +1,11 @@
+[package]
+name = "kernelcodegen"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+kernelcodegen_macros = { path = "../kernelcodegen_macros/" }
+
+[target."cfg(not(target_arch=\"spirv\"))".dependencies]
+kernelcodegen_types = { path = "../kernelcodegen_types/" }
+wgpu = { version = "23.0.1", features = ["spirv"] }

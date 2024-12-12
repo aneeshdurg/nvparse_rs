@@ -1,16 +1,15 @@
 #![cfg_attr(target_arch = "spirv", no_std)]
 #![deny(warnings)]
-use glam::UVec3;
 use spirv_std::{glam, spirv};
+use glam::UVec3;
 
 #[cfg(not(target_arch = "spirv"))]
 pub mod codegen {
-    use crate::glam::UVec3;
-    use core::num::NonZeroU64;
-    use kernelcodegen_types::Generated;
+    use kernelcodegen::{ComputeKernel, wgpu};
     use wgpu::Device;
+    use core::num::NonZeroU64;
 
-    pub fn new(device: &Device, shader_bytes: &[u8]) -> Generated {
+    pub fn new(device: &Device, shader_bytes: &[u8]) -> ComputeKernel {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("countchar_bind_group_layout"),
             entries: &[
@@ -90,9 +89,9 @@ pub mod codegen {
             cache: None,
         });
 
-        let workgroup_dim = UVec3::from((64, 1, 1));
+        let workgroup_dim = (64, 1, 1);
 
-        Generated {
+        ComputeKernel {
             bind_group_layout,
             pipeline_layout,
             compute_pipeline,

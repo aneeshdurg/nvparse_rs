@@ -269,7 +269,7 @@ fn consume_buffer(
                 &char_buf,
                 &output_buf,
             ],
-            (nthreads as u32 / countchar_gen.workgroup_dim.x, 1, 1),
+            (nthreads as u32 / countchar_gen.workgroup_dim.0, 1, 1),
         );
 
         // Run the queued computation
