@@ -2,6 +2,7 @@
 use wgpu::{BindGroupLayout, ComputePipeline, PipelineLayout};
 
 #[cfg(not(target_arch = "spirv"))]
+#[derive(Debug)]
 pub struct ComputeKernel {
     pub bind_group_layout: BindGroupLayout,
     pub pipeline_layout: PipelineLayout,
