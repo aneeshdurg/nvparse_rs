@@ -1,10 +1,10 @@
 use wgpu::util::DeviceExt;
 
 use futures::channel::oneshot;
+use std::convert::TryInto;
 use std::ops::RangeBounds;
 use std::sync::mpsc;
 use std::thread;
-use std::convert::TryInto;
 use tqdm::pbar;
 use wgpu::{Adapter, BufferAsyncError, Device, Queue, RequestDeviceError};
 
@@ -20,6 +20,9 @@ async fn init_adapter() -> Option<Adapter> {
 }
 
 async fn init_device(adapter: &Adapter) -> Result<(Device, Queue), RequestDeviceError> {
+    // let mut required_limits = adapter.limits();
+    // required_limits.max_storage_buffer_binding_size = 2<<30 - 1;
+    // required_limits.max_buffer_size = 2<<30 - 1;
     adapter
         .request_device(
             &wgpu::DeviceDescriptor {
@@ -113,6 +116,8 @@ fn consume_buffer(
     let mut acc = 0;
     let mut compute_pbar = pbar(Some(total_len));
 
+    let timer = std::time::Instant::now();
+
     let countchar_gen = countchar::codegen::new(&device, include_bytes!(env!("countchar.spv")));
     let _parsecsv_gen = parsecsv::codegen::new(&device, include_bytes!(env!("parsecsv.spv")));
     let getcharpos_gen = getcharpos::codegen::new(&device, include_bytes!(env!("getcharpos.spv")));
@@ -148,18 +153,38 @@ fn consume_buffer(
         mapped_at_creation: false,
     });
 
+    let setup_dur = timer.elapsed();
+    let mut encoder_dur = std::time::Duration::ZERO;
+    let mut submit_dur = std::time::Duration::ZERO;
+    let mut output_dur = std::time::Duration::ZERO;
+    let mut wait_dur = std::time::Duration::ZERO;
+    let mut write_uniform_dur = std::time::Duration::ZERO;
+
+    let mut max_chunk_size = 0;
+
+    let limits = device.limits();
+
     loop {
+        let timer = std::time::Instant::now();
         let (offset, end, input_buf_id) = receiver.recv().unwrap();
+        wait_dur += timer.elapsed();
+        let timer = std::time::Instant::now();
         let data_len = (end - offset) as u32;
         // For storing a single u32 into a buffer, the intermediate copy isn't expensive
         store_u32(&queue, &data_len_buf, data_len);
-        let chunk_size: u32 = (data_len / nthreads as u32) + 1;
+        let n_dispatches = std::cmp::min(1 + data_len / countchar_gen.workgroup_dim.0, limits.max_compute_workgroups_per_dimension);
+        let chunk_size: u32 = data_len / (n_dispatches * countchar_gen.workgroup_dim.0) + 1;
+        max_chunk_size = std::cmp::max(chunk_size, max_chunk_size);
         store_u32(&queue, &chunk_size_buf, chunk_size);
+        write_uniform_dur += timer.elapsed();
+
+        let timer = std::time::Instant::now();
 
         // Create the compute pass
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("do compute"),
         });
+        let dispatch = (n_dispatches, 1, 1);
         bind_buffers_and_run(
             &mut encoder,
             &device,
@@ -172,49 +197,84 @@ fn consume_buffer(
                 &char_buf,
                 &output_buf,
             ],
-            (nthreads as u32 / countchar_gen.workgroup_dim.0, 1, 1),
+            dispatch,
         );
+
+        encoder_dur += timer.elapsed();
+        let timer = std::time::Instant::now();
 
         // Run the queued computation
         queue.submit(Some(encoder.finish()));
 
-        let nlines_per_thread = read_buffer(&device, &output_buf, ..);
-        let nlines = nlines_per_thread.iter().fold(0, |acc, e| acc + *e);
-        acc += nlines;
+        submit_dur += timer.elapsed();
+        //let output_timer = std::time::Instant::now();
 
-        let charpos_output_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("charpos output"),
-            size: ((nlines + 1) * 4) as wgpu::BufferAddress,
-            // Can be read to the CPU, and can be copied from the shader's storage buffer
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::MAP_READ
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        // let nlines_per_thread = read_buffer(&device, &output_buf, ..);
+        // println!("{:?}", nlines_per_thread);
+        // Map the readback_buffer to the CPU
+        // let buffer_slice = output_buf.slice(..(4 as wgpu::BufferAddress));
+        // let (resolver, waiter) = oneshot::channel();
+        // buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
+        //     resolver.send(res).unwrap();
+        // });
+        // let timer = std::time::Instant::now();
+        // // Wait for the buffer to be mapped and ready for reading
+        // device.poll(wgpu::Maintain::Wait);
+        // poll_dur += timer.elapsed();
+        // let timer = std::time::Instant::now();
+        // futures::executor::block_on(waiter)
+        //     .unwrap()
+        //     .expect("Mapping failed");
+        // cb_dur += timer.elapsed();
 
-        // Create the compute pass
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("get char positions"),
-        });
-        bind_buffers_and_run(
-            &mut encoder,
-            &device,
-            &getcharpos_gen.compute_pipeline,
-            &getcharpos_gen.bind_group_layout,
-            &[
-                &input_bufs[input_buf_id],
-                &chunk_size_buf,
-                &data_len_buf,
-                &char_buf,
-                &output_buf,
-                &charpos_output_buf,
-            ],
-            (nthreads as u32 / 64, 1, 1),
-        );
+        // let timer = std::time::Instant::now();
+        // // Copy from GPU to CPU
+        // let nlines_per_thread = buffer_slice
+        //     .get_mapped_range()
+        //     .chunks_exact(4)
+        //     .map(|b| u32::from_ne_bytes(b.try_into().unwrap()))
+        //     .collect::<Vec<_>>();
+        // read_mapped_dur += timer.elapsed();
+        // // Unmap the GPU buffer so that it can be re-used in the next iteration
+        // output_buf.unmap();
+        // let nlines = nlines_per_thread.iter().fold(0, |acc, e| acc + *e);
+        // acc += nlines;
 
-        // Run the queued computation
-        queue.submit(Some(encoder.finish()));
+        // output_dur += output_timer.elapsed();
+
+        //let charpos_output_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        //    label: Some("charpos output"),
+        //    size: ((nlines + 1) * 4) as wgpu::BufferAddress,
+        //    // Can be read to the CPU, and can be copied from the shader's storage buffer
+        //    usage: wgpu::BufferUsages::STORAGE
+        //        | wgpu::BufferUsages::MAP_READ
+        //        | wgpu::BufferUsages::COPY_SRC
+        //        | wgpu::BufferUsages::COPY_DST,
+        //    mapped_at_creation: false,
+        //});
+
+        //// Create the compute pass
+        //let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        //    label: Some("get char positions"),
+        //});
+        //bind_buffers_and_run(
+        //    &mut encoder,
+        //    &device,
+        //    &getcharpos_gen.compute_pipeline,
+        //    &getcharpos_gen.bind_group_layout,
+        //    &[
+        //        &input_bufs[input_buf_id],
+        //        &chunk_size_buf,
+        //        &data_len_buf,
+        //        &char_buf,
+        //        &output_buf,
+        //        &charpos_output_buf,
+        //    ],
+        //    (nthreads as u32 / 64, 1, 1),
+        //);
+
+        //// Run the queued computation
+        //queue.submit(Some(encoder.finish()));
 
         let _ = compute_pbar.update(data_len as usize);
 
@@ -226,8 +286,22 @@ fn consume_buffer(
             .send(input_buf_id)
             .expect("semaphore add failed");
     }
-
     drop(compute_pbar);
+
+    let timer = std::time::Instant::now();
+    let nlines_per_thread = read_buffer(&device, &output_buf, ..);
+    let nlines = nlines_per_thread.iter().fold(0, |acc, e| acc + *e);
+    acc += nlines;
+    output_dur += timer.elapsed();
+
+    eprintln!("setup_dur: {:?}", setup_dur);
+    eprintln!("wait_dur: {:?}", setup_dur);
+    eprintln!("write_uniform_dur: {:?}", encoder_dur);
+    eprintln!("encoder_dur: {:?}", encoder_dur);
+    eprintln!("submit_dur: {:?}", submit_dur);
+    eprintln!("output_dur: {:?}", output_dur);
+    eprintln!("max_chunk_size: {:?}", max_chunk_size);
+
     acc
 }
 
@@ -244,11 +318,11 @@ pub async fn run_charcount_shader(
         .expect("Failed to create device");
     let device = std::sync::Arc::new(device);
 
-    let limits = adapter.limits();
+    let limits = device.limits();
     // eprintln!("LIMITS = {:?}", limits);
     // Using a smaller size here seems to have better performance. Maybe because it provides more
     // opportunities for compute to overlap with IO, hiding the latency?
-    let max_buffer_size = limits.max_storage_buffer_binding_size / 16;
+    let max_buffer_size = limits.max_storage_buffer_binding_size / 8;
     println!("max_buffer_size {}", max_buffer_size);
     const N_INPUT_BUFS: usize = 8;
     let mut input_bufs = Vec::new();
@@ -274,7 +348,8 @@ pub async fn run_charcount_shader(
             .send(i)
             .expect("semaphore initialization failed");
     }
-
+    // This channel is used to send tasks from the producer to the consumer. Each task includes a
+    // buffer id to identify which buffer should be bound to the GPU's compute pipeline
     let (sender, receiver) = mpsc::channel();
 
     // Takes filled in buffers and run the compute kernel on the GPU
@@ -298,6 +373,8 @@ pub async fn run_charcount_shader(
         })
     };
 
+    let mut write_time = std::time::Duration::ZERO;
+
     // Copy chunks into buffers that aren't currently in-use
     let mut offset = 0;
     while offset < total_len {
@@ -306,6 +383,7 @@ pub async fn run_charcount_shader(
         let end = std::cmp::min(offset + max_buffer_size as usize, total_len);
         let slice = &input[offset..end];
 
+        let timer = std::time::Instant::now();
         let input_buf = &input_bufs[input_buf_id];
         // Map the input buffer into memory to avoid intermediate copying
         let (resolver, waiter) = oneshot::channel();
@@ -319,6 +397,7 @@ pub async fn run_charcount_shader(
         input_slice.get_mapped_range_mut().clone_from_slice(slice);
         // Unmap the GPU buffer so that it can be used in the shader
         input_buf.unmap();
+        write_time += timer.elapsed();
 
         sender
             .send((offset, end, input_buf_id))
@@ -326,6 +405,8 @@ pub async fn run_charcount_shader(
 
         offset = end;
     }
+
+    eprintln!("write time: {:?}", write_time);
 
     let acc = consumer.join().expect("Thread failed");
     Ok(acc)

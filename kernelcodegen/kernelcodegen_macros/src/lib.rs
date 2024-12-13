@@ -235,14 +235,12 @@ pub fn generate_kernel(_attr: TokenStream, item: TokenStream) -> TokenStream {
                                             storage_class
                                         {
                                             let s = storage_class.span().source_text().unwrap();
-                                            if s == "global_invocation_id" {
-                                                continue;
-                                            }
-
                                             let binding = if s == "storage_buffer" {
                                                 BindingType::Storage
-                                            } else {
+                                            } else if s == "uniform" {
                                                 BindingType::Uniform
+                                            } else {
+                                                continue;
                                             };
 
                                             let descriptor_id = match descriptor_set_id.unwrap() {
