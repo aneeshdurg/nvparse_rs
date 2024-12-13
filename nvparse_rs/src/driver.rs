@@ -4,9 +4,9 @@ use futures::channel::oneshot;
 use std::ops::RangeBounds;
 use std::sync::mpsc;
 use std::thread;
-use std::{convert::TryInto, num::NonZeroU64};
+use std::convert::TryInto;
 use tqdm::pbar;
-use wgpu::{Adapter, BufferAsyncError, Device, Queue, RequestDeviceError, ShaderModule};
+use wgpu::{Adapter, BufferAsyncError, Device, Queue, RequestDeviceError};
 
 async fn init_adapter() -> Option<Adapter> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
@@ -33,17 +33,6 @@ async fn init_device(adapter: &Adapter) -> Result<(Device, Queue), RequestDevice
             None,
         )
         .await
-}
-
-fn load_shader_module(device: &Device, shader_bytes: &[u8]) -> ShaderModule {
-    let spirv = std::borrow::Cow::Owned(wgpu::util::make_spirv_raw(shader_bytes).into_owned());
-    let shader_binary = wgpu::ShaderModuleDescriptorSpirV {
-        label: Some("mymodule"),
-        source: spirv,
-    };
-
-    // Load the shaders from disk
-    unsafe { device.create_shader_module_spirv(&shader_binary) }
 }
 
 fn store_u32(queue: &Queue, buffer: &wgpu::Buffer, value: u32) {
@@ -126,93 +115,7 @@ fn consume_buffer(
 
     let countchar_gen = countchar::codegen::new(&device, include_bytes!(env!("countchar.spv")));
     let _parsecsv_gen = parsecsv::codegen::new(&device, include_bytes!(env!("parsecsv.spv")));
-
-    let shader_bytes: &[u8] = include_bytes!(env!("getcharpos.spv"));
-    let getcharpos_module = load_shader_module(&device, shader_bytes);
-
-    let getcharpos_bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("getcharpos_bind_group_layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    count: None,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        has_dynamic_offset: false,
-                        min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    },
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    count: None,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        has_dynamic_offset: false,
-                        min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                        ty: wgpu::BufferBindingType::Uniform,
-                    },
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    count: None,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        has_dynamic_offset: false,
-                        min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                        ty: wgpu::BufferBindingType::Uniform,
-                    },
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    count: None,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        has_dynamic_offset: false,
-                        min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                        ty: wgpu::BufferBindingType::Uniform,
-                    },
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    count: None,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        has_dynamic_offset: false,
-                        min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    },
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    count: None,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        has_dynamic_offset: false,
-                        min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    },
-                },
-            ],
-        });
-
-    let getcharpos_pipeline_layout =
-        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("mylayout"),
-            bind_group_layouts: &[&getcharpos_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-
-    let getcharpos_compute_pipeline =
-        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("getcharpos_compute_pipeline"),
-            layout: Some(&getcharpos_pipeline_layout),
-            module: &getcharpos_module,
-            entry_point: Some("main_getcharpos"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
+    let getcharpos_gen = getcharpos::codegen::new(&device, include_bytes!(env!("getcharpos.spv")));
 
     let chunk_size_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Chunk size"),
@@ -297,8 +200,8 @@ fn consume_buffer(
         bind_buffers_and_run(
             &mut encoder,
             &device,
-            &getcharpos_compute_pipeline,
-            &getcharpos_bind_group_layout,
+            &getcharpos_gen.compute_pipeline,
+            &getcharpos_gen.bind_group_layout,
             &[
                 &input_bufs[input_buf_id],
                 &chunk_size_buf,

@@ -3,8 +3,8 @@ use glam::UVec3;
 use kernelcodegen::generate_kernel;
 use spirv_std::{glam, spirv};
 
-#[spirv(compute(threads(64)))]
 #[generate_kernel()]
+#[spirv(compute(threads(64)))]
 pub fn main_cc(
     #[spirv(global_invocation_id)] id: UVec3,
     // residual is the buffer from the previous iteration - it's possible that there's some line at the
@@ -12,7 +12,8 @@ pub fn main_cc(
     //  residual[residual_offset:] + input[:line_start_offsets[0]])
     #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] _residual: &mut [u8],
     #[spirv(uniform, descriptor_set = 0, binding = 1)] _residual_len: &u32,
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] _residual_line_start_offsets: &[u32],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)]
+    _residual_line_start_offsets: &[u32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] _input: &mut [u8],
     #[spirv(uniform, descriptor_set = 0, binding = 6)] _char: &u8,
     // min(chunk_lines, line_start_offsets.len() - chunk_lines * id.x) is the number of lines to

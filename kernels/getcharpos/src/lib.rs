@@ -2,8 +2,10 @@
 #![deny(warnings)]
 
 use glam::UVec3;
+use kernelcodegen::generate_kernel;
 use spirv_std::{glam, spirv};
 
+#[generate_kernel()]
 #[spirv(compute(threads(64)))]
 pub fn main_getcharpos(
     #[spirv(global_invocation_id)] id: UVec3,

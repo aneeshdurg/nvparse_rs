@@ -491,6 +491,7 @@ dependencies = [
 name = "getcharpos"
 version = "0.1.0"
 dependencies = [
+ "kernelcodegen",
  "spirv-std",
 ]
 
@@ -894,6 +895,7 @@ dependencies = [
  "clap",
  "countchar",
  "futures",
+ "getcharpos",
  "memmap",
  "parsecsv",
  "spirv-builder",

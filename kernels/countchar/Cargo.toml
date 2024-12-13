@@ -8,6 +8,4 @@ crate-type = ["dylib", "lib"]
 
 [dependencies]
 spirv-std = { git = "https://github.com/rust-gpu/rust-gpu" }
-
-[target."cfg(not(target_arch=\"spirv\"))".dependencies]
 kernelcodegen = { path = "../../kernelcodegen/kernelcodegen/" }

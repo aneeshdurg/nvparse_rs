@@ -11,6 +11,7 @@ futures = "0.3.31"
 wgpu = { version = "23.0.1", features = ["spirv"] }
 
 countchar = { path = "../kernels/countchar" }
+getcharpos = { path = "../kernels/getcharpos" }
 parsecsv = { path = "../kernels/parsecsv" }
 
 [build-dependencies]
