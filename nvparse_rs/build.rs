@@ -5,6 +5,7 @@ fn main() {
         let path = kernel.expect("Invalid path in kernels folder").path();
         let compile_res = SpirvBuilder::new(&path, "spirv-unknown-vulkan1.1")
             .capability(Capability::Int8)
+            .capability(Capability::VulkanMemoryModelDeviceScope)
             .build()
             .expect("Kernel failed to compile");
 

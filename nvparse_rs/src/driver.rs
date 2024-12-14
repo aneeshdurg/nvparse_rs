@@ -104,7 +104,6 @@ fn read_buffer<S: RangeBounds<wgpu::BufferAddress>>(
 }
 
 fn consume_buffer(
-    nthreads: usize,
     total_len: usize,
     device: std::sync::Arc<Device>,
     queue: &Queue,
@@ -113,6 +112,8 @@ fn consume_buffer(
     receiver: mpsc::Receiver<(usize, usize, usize)>,
     free_buffer: mpsc::Sender<usize>,
 ) -> u32 {
+    let limits = device.limits();
+
     let mut acc = 0;
     let mut compute_pbar = pbar(Some(total_len));
 
@@ -144,7 +145,7 @@ fn consume_buffer(
 
     let output_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("count (output)"),
-        size: (nthreads * 4) as wgpu::BufferAddress,
+        size: (countchar_gen.workgroup_dim.0 * 4) as wgpu::BufferAddress,
         // Can be read to the CPU, and can be copied from the shader's storage buffer
         usage: wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::MAP_READ
@@ -161,8 +162,6 @@ fn consume_buffer(
     let mut write_uniform_dur = std::time::Duration::ZERO;
 
     let mut max_chunk_size = 0;
-
-    let limits = device.limits();
 
     loop {
         let timer = std::time::Instant::now();
@@ -185,6 +184,7 @@ fn consume_buffer(
             label: Some("do compute"),
         });
         let dispatch = (n_dispatches, 1, 1);
+        // eprintln!("dispatch={:?} chunk_size={:?} data_len={:?}", dispatch, chunk_size, data_len);
         bind_buffers_and_run(
             &mut encoder,
             &device,
@@ -359,7 +359,6 @@ pub async fn run_charcount_shader(
         thread::spawn(move || -> u32 {
             let timer = std::time::Instant::now();
             let res = consume_buffer(
-                nthreads,
                 total_len,
                 device,
                 &queue,
