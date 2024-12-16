@@ -22,25 +22,22 @@ fn cpu_count_char(data: &[u8], char: u8) -> u32 {
     acc
 }
 
-fn run_count_char(data: &[u8], char: u8, nthreads: usize) -> u32 {
-    futures::executor::block_on(driver::run_charcount_shader(data, char, nthreads)).unwrap()
+fn run_count_char(data: &[u8], char: u8) -> u32 {
+    futures::executor::block_on(driver::run_charcount_shader(data, char)).unwrap()
 }
 
-fn count_char(nthreads: usize, data: &[u8], char: u8) -> Result<u32, Box<dyn std::error::Error>> {
-    if data.len() < (2 * nthreads) {
-        // Insufficient parallelism, reduce on CPU
-        Ok(cpu_count_char(data, char))
-    } else {
-        Ok(run_count_char(data, char, nthreads))
-    }
+fn count_char(data: &[u8], char: u8) -> Result<u32, Box<dyn std::error::Error>> {
+    // if data.len() < (2 * nthreads) {
+    //     // Insufficient parallelism, reduce on CPU
+    //     Ok(cpu_count_char(data, char))
+    // } else {
+    Ok(run_count_char(data, char))
+    // }
 }
 
 #[derive(Parser)]
 struct Args {
     filename: String,
-
-    #[arg(short, long, default_value = "65535")]
-    nthreads: usize,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -49,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file = File::open(&args.filename)?;
     let mmap = unsafe { MmapOptions::new().map(&file)? };
 
-    let nlines = count_char(args.nthreads, &mmap, b'\n')?;
+    let nlines = count_char(&mmap, b'\n')?;
 
     let timer = std::time::Instant::now();
     let cpures = cpu_count_char(&mmap, b'\n');
