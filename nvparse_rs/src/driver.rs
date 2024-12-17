@@ -120,7 +120,7 @@ fn consume_buffer(
     let timer = std::time::Instant::now();
 
     let countchar_gen = countchar::codegen::new(&device, include_bytes!(env!("countchar.spv")));
-    let _parsecsv_gen = parsecsv::codegen::new(&device, include_bytes!(env!("parsecsv.spv")));
+    let parsecsv_gen = parsecsv::codegen::new(&device, include_bytes!(env!("parsecsv.spv")));
     let getcharpos_gen = getcharpos::codegen::new(&device, include_bytes!(env!("getcharpos.spv")));
 
     let chunk_size_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -133,6 +133,12 @@ fn consume_buffer(
     let char_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Character to match"),
         contents: &[char],
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+
+    let delimeter_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Character to match"),
+        contents: &[b'|'],
         usage: wgpu::BufferUsages::UNIFORM,
     });
 
@@ -241,7 +247,6 @@ fn consume_buffer(
             mapped_at_creation: false,
         });
 
-        // Create the compute pass
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("get char positions"),
         });
@@ -265,8 +270,57 @@ fn consume_buffer(
         // Run the queued computation
         queue.submit(Some(encoder.finish()));
 
-        let x = read_buffer(&device, &charpos_output_buf, ..);
-        eprintln!("char pos: {:?}", x);
+        device.poll(wgpu::Maintain::Wait);
+        eprintln!("Staring encode for parsecsv");
+
+        let lines_per_thread = std::cmp::max(1, nlines / (dispatch.0 * parsecsv_gen.workgroup_dim.0));
+        store_u32(&queue, &chunk_size_buf, lines_per_thread);
+
+        eprintln!("parsecsv.0");
+
+        let col0output_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("parsed column0 output"),
+            size: ((nlines + 1) * 4) as wgpu::BufferAddress,
+            // Can be read to the CPU, and can be copied from the shader's storage buffer
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::MAP_READ
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        eprintln!("parsecsv.1");
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("parse CSV"),
+        });
+        bind_buffers_and_run(
+            &mut encoder,
+            &device,
+            &parsecsv_gen.compute_pipeline,
+            &parsecsv_gen.bind_group_layout,
+            &[
+                &input_bufs[input_buf_id + 1],
+                &data_len_buf,
+                &input_bufs[input_buf_id],
+                &data_len_buf,
+                &delimeter_buf,
+                &chunk_size_buf,
+                &charpos_output_buf,
+                &col0output_buf,
+            ],
+            dispatch,
+        );
+        eprintln!("parsecsv.2");
+
+        // Run the queued computation
+        queue.submit(Some(encoder.finish()));
+
+        eprintln!("parsecsv.3");
+        let x = read_buffer(&device, &col0output_buf, ..);
+        for el in x {
+            println!("{}", el);
+        }
+        eprintln!("parsecsv.4");
 
         let _ = compute_pbar.update(data_len as usize);
 
