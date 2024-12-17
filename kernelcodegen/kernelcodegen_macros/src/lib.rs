@@ -21,70 +21,54 @@ impl ShaderArg {
     fn to_bind_group_layout_entry(&self) -> Vec<proc_macro2::TokenTree> {
         assert_eq!(self.descriptor_id, 0);
 
-        let mut tokens: Vec<proc_macro2::TokenTree> = Vec::new();
-        tokens.extend(quote! { wgpu::BindGroupLayoutEntry });
-        tokens.push(TokenTree::from(Group::new(Delimiter::Brace, {
-            let mut tokens: Vec<proc_macro2::TokenTree> = Vec::new();
-            tokens.extend(quote! { binding: });
-            tokens.push(TokenTree::from(Literal::usize_unsuffixed(self.binding_id)));
-            tokens.extend(quote! { , count: None, visibility: wgpu::ShaderStages::COMPUTE, });
-            tokens.extend(quote! { ty: wgpu::BindingType::Buffer });
-            tokens.push(TokenTree::from(Group::new(Delimiter::Brace, {
-                let mut tokens: Vec<proc_macro2::TokenTree> = Vec::new();
-                tokens.extend(quote! {
+        let storage_class = match self.binding {
+            BindingType::Storage => {
+                quote! { wgpu::BufferBindingType::Storage { read_only: false } }
+            }
+            _ => {
+                quote! { wgpu::BufferBindingType::Uniform }
+            }
+        };
+
+        let bind_id = TokenTree::from(Literal::usize_unsuffixed(self.binding_id));
+
+        quote! {
+            wgpu::BindGroupLayoutEntry {
+                binding: #bind_id,
+                count: None,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
                     has_dynamic_offset: false,
                     min_binding_size: Some(NonZeroU64::new(1).unwrap()),
-                    ty:
-                });
-                match self.binding {
-                    BindingType::Storage => {
-                        tokens.extend(
-                            quote! { wgpu::BufferBindingType::Storage { read_only: false } },
-                        );
-                    }
-                    _ => {
-                        tokens.extend(quote! { wgpu::BufferBindingType::Uniform });
-                    }
+                    ty: #storage_class
                 }
-
-                tokens.into_iter().collect()
-            })));
-
-            tokens.into_iter().collect()
-        })));
-
-        tokens
+            }
+        }
+        .into_iter()
+        .collect()
     }
 }
 
 fn create_bind_group_layout_args(mod_name: &str, args: &[ShaderArg]) -> TokenTree {
-    let label = format!("{}_bind_group_layout", mod_name);
-    let mut tokens: Vec<proc_macro2::TokenTree> = Vec::new();
-    tokens.extend(quote! { &wgpu::BindGroupLayoutDescriptor });
-    tokens.push(TokenTree::from(Group::new(Delimiter::Brace, {
-        let mut descriptor_tokens: Vec<proc_macro2::TokenTree> = Vec::new();
-        descriptor_tokens.extend(quote! { label: Some});
-        descriptor_tokens.push(TokenTree::from(Group::new(
-            Delimiter::Parenthesis,
-            [TokenTree::from(Literal::string(&label))]
-                .into_iter()
-                .collect(),
-        )));
-        descriptor_tokens.extend(quote! {, entries: &});
-        descriptor_tokens.push(TokenTree::from(Group::new(Delimiter::Bracket, {
-            let mut arg_tokens: Vec<proc_macro2::TokenTree> = Vec::new();
-            for arg in args.iter() {
-                arg_tokens.extend(arg.to_bind_group_layout_entry());
-                arg_tokens.extend(quote! {,});
-            }
-            arg_tokens.into_iter().collect()
-        })));
-        descriptor_tokens.into_iter().collect()
-    })));
-
+    let label = Literal::string(&format!("{}_bind_group_layout", mod_name));
+    let bindings = TokenTree::from(Group::new(Delimiter::Bracket, {
+        let mut arg_tokens: Vec<proc_macro2::TokenTree> = Vec::new();
+        for arg in args.iter() {
+            arg_tokens.extend(arg.to_bind_group_layout_entry());
+            arg_tokens.extend(quote! {,});
+        }
+        arg_tokens.into_iter().collect()
+    }));
     TokenTree::from(Group::new(
         Delimiter::Parenthesis,
-        tokens.into_iter().collect(),
+        quote! {
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some(#label),
+                entries: &#bindings,
+            }
+        }
+        .into_iter()
+        .collect(),
     ))
 }
 
@@ -278,117 +262,12 @@ pub fn generate_kernel(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 
-    let mut tokens: Vec<proc_macro2::TokenTree> = Vec::new();
-    // Module header
-    tokens.extend(quote! {
-        #[cfg(not(target_arch = "spirv"))]
-        pub mod codegen
-    });
-
-    // Generate module body
-    let mut modtokens: Vec<proc_macro2::TokenTree> = Vec::new();
-    modtokens.extend(quote! {
-        use kernelcodegen::{ComputeKernel, wgpu};
-        use wgpu::Device;
-        use core::num::NonZeroU64;
-
-        pub fn new(device: &Device, shader_bytes: &[u8]) -> ComputeKernel
-    });
-
-    let mut fntokens: Vec<proc_macro2::TokenTree> = Vec::new();
-    fntokens.extend(quote! { let bind_group_layout = device.create_bind_group_layout });
-    fntokens.push(create_bind_group_layout_args(&modname, &args));
-    fntokens.extend(quote! {;});
-
-    fntokens.extend(quote! { let pipeline_layout = device.create_pipeline_layout });
-    fntokens.push(TokenTree::from(Group::new(Delimiter::Parenthesis, {
-        let mut create_pipeline_tokens: Vec<proc_macro2::TokenTree> = Vec::new();
-        create_pipeline_tokens.extend(quote! {&wgpu::PipelineLayoutDescriptor});
-        create_pipeline_tokens.push(TokenTree::from(Group::new(Delimiter::Brace, {
-            let mut create_pipeline_fields_tokens: Vec<proc_macro2::TokenTree> = Vec::new();
-            create_pipeline_fields_tokens.extend(quote! {label: Some});
-            create_pipeline_fields_tokens.push(TokenTree::from(Group::new(
-                Delimiter::Parenthesis,
-                [TokenTree::from(Literal::string(&format!(
-                    "{}_layout",
-                    modname
-                )))]
-                .into_iter()
-                .collect(),
-            )));
-            create_pipeline_fields_tokens.extend(quote! {
-               ,
-               bind_group_layouts: &[&bind_group_layout],
-               push_constant_ranges: &[],
-            });
-            create_pipeline_fields_tokens.into_iter().collect()
-        })));
-        create_pipeline_tokens.into_iter().collect()
-    })));
-    fntokens.extend(quote! {;});
-
-    fntokens.extend(quote! {
-      let spirv = std::borrow::Cow::Owned(wgpu::util::make_spirv_raw(shader_bytes).into_owned());
-      let shader_binary = wgpu::ShaderModuleDescriptorSpirV
-    });
-    fntokens.push(TokenTree::from(Group::new(Delimiter::Brace, {
-        let mut shader_desc_tokens: Vec<proc_macro2::TokenTree> = Vec::new();
-        shader_desc_tokens.extend(quote! {label: Some});
-        shader_desc_tokens.push(TokenTree::from(Group::new(
-            Delimiter::Parenthesis,
-            [TokenTree::from(Literal::string(&modname))]
-                .into_iter()
-                .collect(),
-        )));
-        shader_desc_tokens.extend(quote! {, source: spirv});
-        shader_desc_tokens.into_iter().collect()
-    })));
-    fntokens.extend(quote! {;});
-    fntokens.extend(
-        quote! { let module = unsafe { device.create_shader_module_spirv(&shader_binary) }; },
-    );
-
-    fntokens.extend(quote! { let compute_pipeline  = device.create_compute_pipeline });
-    fntokens.push(TokenTree::from(Group::new(Delimiter::Parenthesis, {
-        let mut create_pipeline_tokens: Vec<proc_macro2::TokenTree> = Vec::new();
-        create_pipeline_tokens.extend(quote! {&wgpu::ComputePipelineDescriptor});
-        create_pipeline_tokens.push(TokenTree::from(Group::new(Delimiter::Brace, {
-            let mut create_pipeline_fields_tokens: Vec<proc_macro2::TokenTree> = Vec::new();
-            create_pipeline_fields_tokens.extend(quote! {label: Some});
-            create_pipeline_fields_tokens.push(TokenTree::from(Group::new(
-                Delimiter::Parenthesis,
-                [TokenTree::from(Literal::string(&format!(
-                    "{}_compute_pipeline",
-                    modname
-                )))]
-                .into_iter()
-                .collect(),
-            )));
-            create_pipeline_fields_tokens.extend(quote! {
-               ,
-               layout: Some(&pipeline_layout),
-               module: &module,
-               entry_point: Some
-            });
-            create_pipeline_fields_tokens.push(TokenTree::from(Group::new(
-                Delimiter::Parenthesis,
-                [TokenTree::from(Literal::string(&entrypt))]
-                    .into_iter()
-                    .collect(),
-            )));
-            create_pipeline_fields_tokens.extend(quote! {
-               ,
-               compilation_options: Default::default(),
-               cache: None
-            });
-            create_pipeline_fields_tokens.into_iter().collect()
-        })));
-        create_pipeline_tokens.into_iter().collect()
-    })));
-    fntokens.extend(quote! {;});
-
-    fntokens.extend(quote! { let workgroup_dim = });
-    fntokens.push(TokenTree::from(Group::new(Delimiter::Parenthesis, {
+    let bind_group_layout_args = create_bind_group_layout_args(&modname, &args);
+    let layout_label = Literal::string(&format!("{}_layout", modname));
+    let module_name = Literal::string(&modname);
+    let compute_pipeline_label = Literal::string(&format!("{}_compute_pipeline", modname));
+    let entrypt_label = Literal::string(&entrypt);
+    let workgroup_dim_tuple = TokenTree::from(Group::new(Delimiter::Parenthesis, {
         let mut tuple_tokens: Vec<proc_macro2::TokenTree> = Vec::new();
         tuple_tokens.push(TokenTree::from(Literal::u32_unsuffixed(workgroup_dim.0)));
         tuple_tokens.extend(quote! {,});
@@ -396,28 +275,49 @@ pub fn generate_kernel(_attr: TokenStream, item: TokenStream) -> TokenStream {
         tuple_tokens.extend(quote! {,});
         tuple_tokens.push(TokenTree::from(Literal::u32_unsuffixed(workgroup_dim.2)));
         tuple_tokens.into_iter().collect()
-    })));
-    fntokens.extend(quote! {
-        ;
-        ComputeKernel {
-            bind_group_layout,
-            pipeline_layout,
-            compute_pipeline,
-            workgroup_dim,
+    }));
+
+    let mut tokens: Vec<proc_macro2::TokenTree> = Vec::new();
+    // Module header
+    tokens.extend(quote! {
+        #[cfg(not(target_arch = "spirv"))]
+        pub mod codegen {
+            use kernelcodegen::{ComputeKernel, wgpu};
+            use wgpu::Device;
+            use core::num::NonZeroU64;
+
+            pub fn new(device: &Device, shader_bytes: &[u8]) -> ComputeKernel {
+                let bind_group_layout = device.create_bind_group_layout #bind_group_layout_args;
+                let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some(#layout_label),
+                    bind_group_layouts: &[&bind_group_layout],
+                    push_constant_ranges: &[],
+                });
+                let spirv = std::borrow::Cow::Owned(wgpu::util::make_spirv_raw(shader_bytes).into_owned());
+                let shader_binary = wgpu::ShaderModuleDescriptorSpirV {
+                    label: Some(#module_name),
+                    source: spirv
+                };
+                let module = unsafe { device.create_shader_module_spirv(&shader_binary) };
+                let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(#compute_pipeline_label),
+                    layout: Some(&pipeline_layout),
+                    module: &module,
+                    entry_point: Some(#entrypt_label),
+                    compilation_options: Default::default(),
+                    cache: None
+                });
+
+                let workgroup_dim = #workgroup_dim_tuple;
+                ComputeKernel {
+                    bind_group_layout,
+                    pipeline_layout,
+                    compute_pipeline,
+                    workgroup_dim,
+                }
+            }
         }
     });
-
-    // Add function body
-    modtokens.push(TokenTree::from(Group::new(
-        Delimiter::Brace,
-        fntokens.into_iter().collect(),
-    )));
-
-    // Add module body
-    tokens.push(TokenTree::from(Group::new(
-        Delimiter::Brace,
-        modtokens.into_iter().collect(),
-    )));
 
     let mut res = proc_macro2::TokenStream::new();
     res.extend(tokens.into_iter().collect::<proc_macro2::TokenStream>());
