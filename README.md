@@ -1,5 +1,3 @@
 # nvParse-rs
 
-rust port of nvParse
-
-Current status - counting lines on the GPU (slow)
+A portable Rust port of [nvParse](https://github.com/antonmks/nvParse/)
